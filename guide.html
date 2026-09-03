@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What to run before the call</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400&display=optional" rel="stylesheet">
+<style>
+/* ============================================================
+   Stripe's published specification, values taken verbatim:
+   ink #0d253d, canvas #fff, canvas-soft #f6f9fc, hairline #e3e8ee,
+   ink-mute #64748d, radii 4/6/8/12/16/pill, spacing 2/4/8/12/16/24/32/64,
+   display type at weight 300 with negative tracking, pill buttons at 8px 16px.
+
+   One value is swapped: Stripe's indigo #533afd is replaced by Infoblox
+   green, darkened to #0a7a37 so white text on it reaches 5.45:1.
+   Stripe's rule is kept — one filled accent, used sparingly.
+   ============================================================ */
+:root{
+  --ink:#0d253d; --ink-2:#273951; --mute:#64748d;
+  --canvas:#ffffff; --soft:#f6f9fc; --hairline:#e3e8ee; --hairline-input:#a8c3de;
+  --accent:#0a7a37; --accent-deep:#075e2a; --accent-soft:#e8f4ed;
+  --warn:#8a1220; --warn-soft:#fdf2f3; --warn-line:#f3d6da;
+  --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:12px; --r-xl:16px; --r-pill:9999px;
+  --s-xs:4px; --s-sm:8px; --s-md:12px; --s-lg:16px; --s-xl:24px; --s-xxl:32px; --s-huge:64px;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--canvas);color:var(--ink);
+     font-family:Inter,"SF Pro Display",system-ui,-apple-system,sans-serif;
+     font-weight:300;font-size:16px;line-height:1.4;
+     font-feature-settings:"ss01";}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-xs)}
+/* Stripe puts its accent on every link. Green here means: this goes to Axur. */
+a.link{color:var(--accent-deep);font-weight:400;text-decoration:underline;
+       text-underline-offset:3px;text-decoration-thickness:1px}
+a.link:hover{color:var(--accent);text-decoration-thickness:2px}
+a.link .arw{font-size:.85em;margin-left:2px}
+code.url{background:var(--accent-soft);border-color:#bfe0cd;color:var(--accent-deep)}
+
+/* ---------- the band across the top ---------- */
+.band{position:relative;overflow:hidden;border-bottom:1px solid var(--hairline);
+      background:
+        radial-gradient(60% 90% at 8% 0%, #b8ecca 0%, rgba(184,236,202,0) 62%),
+        radial-gradient(55% 85% at 42% 8%, #8fe3d6 0%, rgba(143,227,214,0) 60%),
+        radial-gradient(50% 80% at 78% 0%, #f6e7c2 0%, rgba(246,231,194,0) 58%),
+        radial-gradient(70% 100% at 100% 40%, #d9e9f7 0%, rgba(217,233,247,0) 60%),
+        linear-gradient(180deg,#f4fbf6 0%, var(--canvas) 100%)}
+.wrap{max-width:760px;margin:0 auto;padding:0 var(--s-xl)}
+.band .wrap{padding-top:var(--s-huge);padding-bottom:var(--s-xxl)}
+.mark{height:22px;width:auto;display:block}
+/* the logo's wordmark is near-white, so it needs a dark chip to sit on */
+.markchip{display:inline-flex;align-items:center;background:var(--ink);
+          border-radius:var(--r-md);padding:10px 14px;margin-bottom:var(--s-xl)}
+h1{font-size:48px;font-weight:300;line-height:1.15;letter-spacing:-0.96px;margin:0}
+.lede{font-size:18px;color:var(--ink-2);margin:var(--s-md) 0 var(--s-xl);max-width:52ch}
+
+/* ---------- one filled action, Stripe's pill ---------- */
+.pill{display:inline-flex;align-items:center;gap:var(--s-sm);min-height:48px;
+      padding:12px 24px;border-radius:var(--r-pill);background:var(--accent);
+      color:#fff;text-decoration:none;font-size:17px;font-weight:500;
+      box-shadow:0 2px 6px rgba(10,122,55,.28), 0 8px 22px rgba(10,122,55,.18)}
+.pill:hover{background:var(--accent-deep);box-shadow:0 3px 8px rgba(10,122,55,.34), 0 12px 28px rgba(10,122,55,.22)}
+.pill .arw{font-size:15px;line-height:1}
+
+/* ---------- steps, one column, one thing per line ---------- */
+main .wrap{padding-top:var(--s-huge);padding-bottom:var(--s-huge)}
+.step{border-top:1px solid var(--hairline);padding-top:var(--s-xl);margin-top:var(--s-xxl)}
+.step:first-child{border-top:0;margin-top:0;padding-top:0}
+.num{display:inline-flex;align-items:center;justify-content:center;
+     width:30px;height:30px;border-radius:var(--r-pill);
+     background:var(--accent);color:#fff;
+     font-family:var(--mono);font-size:14px;font-weight:400;letter-spacing:0;
+     font-feature-settings:"tnum"}
+h2{font-size:28px;font-weight:300;line-height:1.12;letter-spacing:-0.26px;margin:var(--s-md) 0 0}
+.note{font-size:16px;color:var(--ink-2);margin:var(--s-md) 0 0;max-width:58ch}
+.note b{font-weight:500}
+
+/* ---------- the two fields ---------- */
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-lg);margin-top:var(--s-lg)}
+label{display:block;font-size:14px;color:var(--mute);letter-spacing:-0.39px;margin-bottom:var(--s-xs)}
+input{width:100%;min-height:46px;padding:10px 12px;border:1px solid var(--hairline-input);
+      border-radius:var(--r-sm);background:var(--canvas);color:var(--ink);
+      font-family:inherit;font-size:16px;font-weight:300}
+input:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
+
+/* ---------- the five searches, stacked full width ---------- */
+.rows{margin-top:var(--s-lg);border:1px solid var(--hairline);border-radius:var(--r-lg);
+      overflow:hidden}
+.row{display:grid;grid-template-columns:1fr auto;gap:var(--s-lg);align-items:center;
+     padding:var(--s-lg);border-top:1px solid var(--hairline);background:var(--canvas)}
+.row:first-child{border-top:0}
+.row .nm{font-size:17px;font-weight:500;color:var(--ink)}
+.row .src{font-family:var(--mono);font-size:13px;color:var(--mute);margin-top:3px}
+.row .q{font-family:var(--mono);font-size:14px;color:var(--ink-2);margin-top:var(--s-sm);
+        background:var(--soft);border:1px solid var(--hairline);border-radius:var(--r-sm);
+        padding:6px 8px;overflow-wrap:anywhere;letter-spacing:-0.39px}
+.row .q .slot{background:var(--accent-soft);border-radius:2px;padding:0 3px}
+.copy{min-height:36px;min-width:84px;padding:8px 18px;border-radius:var(--r-pill);
+      border:1.5px solid var(--accent);background:var(--canvas);color:var(--accent-deep);
+      font-family:inherit;font-size:15px;font-weight:500;cursor:pointer}
+.copy:hover{background:var(--accent);color:#fff}
+.row[data-ready="0"] .copy{border-color:var(--hairline);color:var(--mute);cursor:not-allowed}
+.row[data-ready="0"] .copy:hover{background:transparent;color:var(--mute)}
+
+/* ---------- plain lists ---------- */
+ol.plain,ul.plain{margin:var(--s-lg) 0 0;padding-left:1.15em}
+ol.plain li,ul.plain li{margin-bottom:var(--s-md);font-size:16px;color:var(--ink-2);max-width:58ch}
+code{font-family:var(--mono);font-size:14px;background:var(--soft);
+     border:1px solid var(--hairline);border-radius:var(--r-xs);padding:1px 5px;
+     letter-spacing:-0.39px}
+
+/* ---------- the one warning ---------- */
+.warn{margin-top:var(--s-lg);background:var(--warn-soft);border:1px solid var(--warn-line);
+      border-radius:var(--r-lg);padding:var(--s-lg)}
+.warn b{display:block;color:var(--warn);font-weight:500;font-size:16px;margin-bottom:var(--s-xs)}
+.warn p{margin:0;font-size:16px;color:var(--ink-2);max-width:58ch}
+
+/* ---------- the optional script ---------- */
+.cmd{display:flex;align-items:stretch;margin-top:var(--s-md);border:1px solid var(--hairline);
+     border-radius:var(--r-md);overflow:hidden;background:var(--soft)}
+.cmd code{flex:1;border:0;background:transparent;padding:10px 12px;overflow-x:auto;white-space:nowrap}
+.cmd .copy{border:0;border-left:1px solid var(--hairline);border-radius:0;min-width:64px}
+.get{display:inline-flex;align-items:center;gap:var(--s-sm);min-height:44px;padding:10px 20px;
+     border-radius:var(--r-pill);border:0;background:var(--accent);
+     color:#fff;font-family:inherit;font-size:16px;font-weight:500;cursor:pointer;
+     margin:0 var(--s-sm) var(--s-sm) 0;
+     box-shadow:0 1px 4px rgba(10,122,55,.24), 0 6px 16px rgba(10,122,55,.14)}
+.get:hover{background:var(--accent-deep)}
+.get .arw{font-size:15px;line-height:1}
+.getrow{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-sm);margin-top:var(--s-md)}
+.getcopy{min-width:0}
+dl.flags{display:grid;grid-template-columns:max-content 1fr;gap:var(--s-xs) var(--s-lg);
+         margin:var(--s-lg) 0 0;font-size:15px}
+dl.flags dt{font-family:var(--mono);font-size:14px;color:var(--ink);letter-spacing:-0.39px}
+dl.flags dd{margin:0;color:var(--ink-2)}
+
+footer{border-top:1px solid var(--hairline);background:var(--canvas)}
+footer .wrap{padding-top:var(--s-xl);padding-bottom:var(--s-xl)}
+footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
+
+@media (max-width:640px){
+  .band .wrap{padding-top:var(--s-xxl)}
+  h1{font-size:32px;letter-spacing:-0.64px}
+  .fields{grid-template-columns:1fr}
+  .row{grid-template-columns:1fr}
+  .copy{justify-self:start}
+  dl.flags{grid-template-columns:1fr;gap:0}
+  dl.flags dd{margin-bottom:var(--s-md)}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none!important;animation:none!important}
+}
+@media print{
+  .band{background:none}
+  .copy,.get{display:none}
+  .step{break-inside:avoid}
+  @page{margin:14mm}
+}
+</style>
+</head>
+<body>
+<main>
+
+<div class="band">
+  <div class="wrap">
+    <span class="markchip"><img class="mark" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwMCIgaGVpZ2h0PSIyMTkiIHZpZXdCb3g9IjAgMCAxMDAwIDIxOSIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzFfMjIwKSI+CjxwYXRoIGQ9Ik0yODIuODgxIDE2LjQ1OTJMMTg5Ljk5IDE4OC44MTRDMTg4Ljk1NSAxOTAuNzQ2IDE4OS42NTYgMTkzLjExMiAxOTEuNTkyIDE5NC4xNDVDMTkyLjE2IDE5NC40NDUgMTkyLjgyOCAxOTQuNjExIDE5My40NjIgMTk0LjYxMUgyMjkuNDlDMjMwLjk1OSAxOTQuNjExIDIzMi4yOTUgMTkzLjgxMSAyMzIuOTYzIDE5Mi41NDVMMzI1Ljg1NCAyMC4xOTA4QzMyNi44ODkgMTguMjU4MyAzMjYuMTg4IDE1Ljg5MjcgMzI0LjI1MSAxNC44NTk5QzMyMy42ODQgMTQuNTYgMzIzLjAxNiAxNC4zOTM0IDMyMi4zODEgMTQuMzkzNEgyODYuMzU0QzI4NC44ODQgMTQuMzkzNCAyODMuNTQ5IDE1LjE5MzEgMjgyLjg4MSAxNi40NTkyWiIgZmlsbD0iI0ZGNTgyNCIvPgo8cGF0aCBkPSJNMTg4LjEyIDE2LjQ1OTJMOTUuMjI4NSAxODguODE0Qzk0LjE5MzQgMTkwLjc0NiA5NC44OTQ2IDE5My4xMTIgOTYuODMxMiAxOTQuMTQ1Qzk3LjM5ODggMTk0LjQ0NSA5OC4wNjY2IDE5NC42MTEgOTguNzAxIDE5NC42MTFIMTM0LjcyOUMxMzYuMTk4IDE5NC42MTEgMTM3LjUzNCAxOTMuODExIDEzOC4yMDIgMTkyLjU0NUwyMzEuMDkzIDIwLjE5MDhDMjMyLjEyOCAxOC4yNTgzIDIzMS40MjcgMTUuODkyNyAyMjkuNDkgMTQuODU5OUMyMjguOTIyIDE0LjU2IDIyOC4yNTUgMTQuMzkzNCAyMjcuNjIgMTQuMzkzNEgxOTEuNTkyQzE5MC4xMjMgMTQuMzkzNCAxODguNzg4IDE1LjE5MzEgMTg4LjEyIDE2LjQ1OTJaIiBmaWxsPSIjRkY1ODI0Ii8+CjxwYXRoIGQ9Ik05My4zNTg3IDE2LjQ1OTJMMC40Njc0ODYgMTg4LjgxNEMtMC41Njc2MDcgMTkwLjc0NiAwLjEzMzU4NSAxOTMuMTEyIDIuMDcwMjEgMTk0LjE0NUMyLjYzNzg0IDE5NC40NDUgMy4zMDU2NCAxOTQuNjExIDMuOTQwMDYgMTk0LjYxMUgzOS45NjhDNDEuNDM3MSAxOTQuNjExIDQyLjc3MjcgMTkzLjgxMSA0My40NDA1IDE5Mi41NDVMMTM2LjI5OCAyMC4xOTA4QzEzNy4zMzMgMTguMjU4MyAxMzYuNjMyIDE1Ljg5MjcgMTM0LjY5NiAxNC44NTk5QzEzNC4xMjggMTQuNTYgMTMzLjQ2IDE0LjM5MzQgMTMyLjgyNiAxNC4zOTM0SDk2Ljc5NzlDOTUuMzI4OCAxNC4zOTM0IDkzLjk5MzEgMTUuMTkzMSA5My4zMjUzIDE2LjQ1OTJIOTMuMzU4N1oiIGZpbGw9IiNGRjU4MjQiLz4KPHBhdGggZD0iTTM1OC4yMDkgODYuMTI3M0wzODMuMzg1IDEyLjUyNzZINDAzLjE4NUw0MjkuMDI5IDg2LjEyNzNINDEyLjI2OEw0MDAuNDQ3IDUwLjYxMDJDMzk5LjA0NSA0Ni4wNDU2IDM5Ny41NzYgNDEuMDE0NiAzOTYuMTA3IDM1LjU4MzhDMzk0LjYzOCAzMC4xMTk2IDM5My4xMDIgMjQuMTg5IDM5MS40NjUgMTcuNzI1MkgzOTQuNzcxQzM5My4yMDIgMjQuMjIyMyAzOTEuNjk5IDMwLjE4NjIgMzkwLjMzIDM1LjY4MzdDMzg4Ljk2MSA0MS4xODEyIDM4Ny41OTIgNDYuMTQ1NiAzODYuMjU3IDUwLjYxMDJMMzc0Ljg3MSA4Ni4xMjczSDM1OC4xNzZIMzU4LjIwOVpNMzczLjk2OSA2OS4wMzUxVjU3LjI0MDVINDEzLjMwM1Y2OS4wMzUxSDM3My45NjlaIiBmaWxsPSIjRjJGMkYyIi8+CjxwYXRoIGQ9Ik00NTguMTc5IDUwLjQxMDNWODYuMTI3M0g0NDEuNTg0VjI0LjM4ODlINDU3LjI0NEw0NTcuNTExIDM5Ljc4MThINDU2LjUwOUM0NTguMTQ1IDM0LjYxNzUgNDYwLjU4MyAzMC42NTI3IDQ2My44ODkgMjcuODIwNkM0NjcuMTk0IDI0Ljk4ODYgNDcxLjQ2OCAyMy41ODkyIDQ3Ni43MSAyMy41ODkyQzQ4MC45ODQgMjMuNTg5MiA0ODQuNzI0IDI0LjUyMjEgNDg3LjkyOSAyNi4zODhDNDkxLjEzNSAyOC4yNTM4IDQ5My42MDYgMzAuOTE5MiA0OTUuMzQyIDM0LjM4NDNDNDk3LjA3OCAzNy44NDk0IDQ5Ny45OCA0Mi4wMTQyIDQ5Ny45OCA0Ni44NDUzVjg2LjA5NEg0ODEuMzg1VjQ5LjcxMDZDNDgxLjM4NSA0NS44NzkxIDQ4MC4zODMgNDIuODgwNCA0NzguNDEzIDQwLjcxNDdDNDc2LjQ0MyAzOC41NDkxIDQ3My43MDUgMzcuNDQ5NiA0NzAuMTk5IDM3LjQ0OTZDNDY3Ljg2MiAzNy40NDk2IDQ2NS43OTIgMzcuOTQ5MyA0NjMuOTg5IDM4Ljk4MjJDNDYyLjE4NiA0MC4wMTUxIDQ2MC43NSA0MS40NDc3IDQ1OS43MTUgNDMuMzgwMkM0NTguNzEzIDQ1LjI3OTMgNDU4LjE3OSA0Ny42NDQ5IDQ1OC4xNzkgNTAuMzc3VjUwLjQxMDNaIiBmaWxsPSIjRjJGMkYyIi8+CjxwYXRoIGQ9Ik01NTQuNDA5IDEyLjUyNzZWODYuMTI3M0g1MzkuMzE3VjEyLjUyNzZINTU0LjQwOVoiIGZpbGw9IiNGMkYyRjIiLz4KPHBhdGggZD0iTTU4Ny43OTkgNTAuNDEwM1Y4Ni4xMjczSDU3MS4yMDRWMjQuMzg4OUg1ODYuODY0TDU4Ny4xMzEgMzkuNzgxOEg1ODYuMTNDNTg3Ljc2NiAzNC42MTc1IDU5MC4yMDMgMzAuNjUyNyA1OTMuNTA5IDI3LjgyMDZDNTk2LjgxNSAyNC45ODg2IDYwMS4wODggMjMuNTg5MiA2MDYuMzMxIDIzLjU4OTJDNjEwLjYwNSAyMy41ODkyIDYxNC4zNDQgMjQuNTIyMSA2MTcuNTUgMjYuMzg4QzYyMC43NTUgMjguMjUzOCA2MjMuMjI2IDMwLjkxOTIgNjI0Ljk2MiAzNC4zODQzQzYyNi42OTkgMzcuODQ5NCA2MjcuNiA0Mi4wMTQyIDYyNy42IDQ2Ljg0NTNWODYuMDk0SDYxMS4wMDVWNDkuNzEwNkM2MTEuMDA1IDQ1Ljg3OTEgNjEwLjAwNCA0Mi44ODA0IDYwOC4wMzQgNDAuNzE0N0M2MDYuMDY0IDM4LjU0OTEgNjAzLjMyNiAzNy40NDk2IDU5OS44MiAzNy40NDk2QzU5Ny40ODIgMzcuNDQ5NiA1OTUuNDEyIDM3Ljk0OTMgNTkzLjYwOSAzOC45ODIyQzU5MS44MDYgNDAuMDE1MSA1OTAuMzcgNDEuNDQ3NyA1ODkuMzM1IDQzLjM4MDJDNTg4LjMzMyA0NS4yNzkzIDU4Ny43OTkgNDcuNjQ0OSA1ODcuNzk5IDUwLjM3N1Y1MC40MTAzWiIgZmlsbD0iI0YyRjJGMiIvPgo8cGF0aCBkPSJNNjc5LjU4OSAyNC4zODg5VjM3LjAxNjRINjM5LjE4N1YyNC4zODg5SDY3OS41ODlaTTY1MC4wNzIgODYuMTI3M1YxOS42NTc3QzY1MC4wNzIgMTUuMjkzIDY1MC45NCAxMS42MjggNjUyLjcxIDguNzI5MzVDNjU0LjQ0NiA1LjgzMDY4IDY1Ni44NSAzLjYzMTY4IDY1OS44ODggMi4xOTlDNjYyLjkyNyAwLjczMzAwNiA2NjYuMzMzIDAuMDMzMzI1MiA2NzAuMTczIDAuMDMzMzI1MkM2NzIuNzc3IDAuMDMzMzI1MiA2NzUuMTgxIDAuMjMzMjM0IDY3Ny4zNTEgMC42NjYzNjlDNjc5LjUyMiAxLjA5OTUxIDY4MS4wOTEgMS40MzI2OSA2ODIuMDkzIDEuNzMyNTVMNjc5LjEyMSAxNC4xOTM1QzY3OC40MiAxMy45OTM2IDY3Ny41ODUgMTMuODI3IDY3Ni42NSAxMy42MjcxQzY3NS43MTUgMTMuNDI3MiA2NzQuNjggMTMuMzYwNiA2NzMuNTc4IDEzLjM2MDZDNjcxLjA3NCAxMy4zNjA2IDY2OS4zMDQgMTMuOTYwMyA2NjguMjM2IDE1LjE1OThDNjY3LjIwMSAxNi4zNTkyIDY2Ni42NjcgMTguMDI1MSA2NjYuNjY3IDIwLjIyNDFWODYuMTYwN0g2NTAuMTM5TDY1MC4wNzIgODYuMTI3M1oiIGZpbGw9IiNGMkYyRjIiLz4KPHBhdGggZD0iTTcxOC44ODkgODcuMzI2OEM3MTIuNjc4IDg3LjMyNjggNzA3LjMzNiA4NS45OTQxIDcwMi43OTUgODMuMzI4NkM2OTguMjU0IDgwLjY2MzIgNjk0Ljc0OCA3Ni45MzE1IDY5Mi4zMSA3Mi4xNjdDNjg5Ljg3MyA2Ny40MDI2IDY4OC42MzcgNjEuODM4NCA2ODguNjM3IDU1LjUwOEM2ODguNjM3IDQ5LjE3NzUgNjg5Ljg3MyA0My41MTM1IDY5Mi4zMSAzOC43NDlDNjk0Ljc0OCAzMy45ODQ1IDY5OC4yNTQgMzAuMjUyOSA3MDIuNzk1IDI3LjU4NzRDNzA3LjMzNiAyNC45MjIgNzEyLjcxMSAyMy41ODkyIDcxOC44ODkgMjMuNTg5MkM3MjUuMDY2IDIzLjU4OTIgNzMwLjUwOCAyNC45MjIgNzM1LjAxNiAyNy41ODc0QzczOS41MjQgMzAuMjUyOSA3NDMuMDMgMzMuOTg0NSA3NDUuNDY3IDM4Ljc0OUM3NDcuOTA1IDQzLjUxMzUgNzQ5LjE0IDQ5LjExMDkgNzQ5LjE0IDU1LjUwOEM3NDkuMTQgNjEuOTA1MSA3NDcuOTA1IDY3LjQwMjYgNzQ1LjQ2NyA3Mi4xNjdDNzQzLjAzIDc2LjkzMTUgNzM5LjUyNCA4MC42NjMyIDczNS4wMTYgODMuMzI4NkM3MzAuNTA4IDg1Ljk5NDEgNzI1LjEzMyA4Ny4zMjY4IDcxOC44ODkgODcuMzI2OFpNNzE4Ljg4OSA3NC4yOTk0QzcyMS44MjcgNzQuMjk5NCA3MjQuMjk4IDczLjQ2NjUgNzI2LjMwMSA3MS44MzM5QzcyOC4zMDUgNzAuMjAxMyA3MjkuNzc0IDY3LjkzNTYgNzMwLjc3NSA2NS4xMDM2QzczMS43NzcgNjIuMjM4MyA3MzIuMjc4IDU5LjAzOTcgNzMyLjI3OCA1NS40NzQ3QzczMi4yNzggNTEuOTA5NiA3MzEuNzc3IDQ4LjU3NzggNzMwLjc3NSA0NS43NDU4QzcyOS43NzQgNDIuOTEzNyA3MjguMjcxIDQwLjY4MTQgNzI2LjMwMSAzOS4wNDg4QzcyNC4yOTggMzcuNDE2MyA3MjEuODI3IDM2LjYxNjYgNzE4Ljg4OSAzNi42MTY2QzcxNS45NSAzNi42MTY2IDcxMy40NzkgMzcuNDE2MyA3MTEuNTA5IDM5LjA0ODhDNzA5LjUzOSA0MC42ODE0IDcwOC4wMzcgNDIuODgwNCA3MDcuMDY5IDQ1Ljc0NThDNzA2LjA2NyA0OC41Nzc4IDcwNS41NjYgNTEuODA5NyA3MDUuNTY2IDU1LjQ3NDdDNzA1LjU2NiA1OS4xMzk3IDcwNi4wNjcgNjIuMjcxNiA3MDcuMDY5IDY1LjEwMzZDNzA4LjA3IDY3Ljk2OSA3MDkuNTM5IDcwLjIwMTMgNzExLjUwOSA3MS44MzM5QzcxMy40NzkgNzMuNDY2NSA3MTUuOTUgNzQuMjk5NCA3MTguODg5IDc0LjI5OTRaIiBmaWxsPSIjRjJGMkYyIi8+CjxwYXRoIGQ9Ik03OTguNzU4IDg3LjE5MzVDNzk1LjM4NSA4Ny4xOTM1IDc5Mi41NDcgODYuNjI3MSA3OTAuMjQzIDg1LjQ5NDNDNzg3LjkzOSA4NC4zNjE1IDc4Ni4wMzYgODIuOTYyMSA3ODQuNTY3IDgxLjI2MjlDNzgzLjA5OCA3OS41OTcgNzgxLjk5NiA3Ny45MzExIDc4MS4yMjggNzYuMjY1Mkg3ODAuNDZWODYuMTYwN0g3NjQuMTMyVjMuODY0OTFINzgwLjcyN1YzNC43ODQxSDc4MS4yMjhDNzgxLjk5NiAzMy4xNTE1IDc4My4wOTggMzEuNDg1NiA3ODQuNTM0IDI5Ljc1MzFDNzg1Ljk2OSAyOC4wMjA1IDc4Ny44MzkgMjYuNTU0NiA3OTAuMTQzIDI1LjM4ODRDNzkyLjQ0NyAyNC4yMjIzIDc5NS4zODUgMjMuNjIyNiA3OTguODkxIDIzLjYyMjZDODAzLjQ2NiAyMy42MjI2IDgwNy42NCAyNC43ODg3IDgxMS40NDYgMjcuMTU0M0M4MTUuMjUzIDI5LjUxOTkgODE4LjI5MSAzMy4wNTE2IDgyMC41NjIgMzcuNzQ5NEM4MjIuODMyIDQyLjQ0NzMgODIzLjk2NyA0OC4zNDQ2IDgyMy45NjcgNTUuMzc0N0M4MjMuOTY3IDYyLjQwNDggODIyLjg2NSA2OC4wMDIzIDgyMC42NjIgNzIuNzMzNUM4MTguNDU4IDc3LjQ2NDYgODE1LjQ1MyA4MS4wNjMgODExLjY0NiA4My40OTUyQzgwNy44NCA4NS45Mjc0IDgwMy41NjYgODcuMTYwMiA3OTguODI1IDg3LjE2MDJMNzk4Ljc1OCA4Ny4xOTM1Wk03OTMuNjQ5IDczLjg2NjNDNzk2LjUyMSA3My44NjYzIDc5OC45NTggNzMuMDY2NiA4MDAuOTI4IDcxLjUwMDdDODAyLjg5OCA2OS45MzQ3IDgwNC40MDEgNjcuNzM1NyA4MDUuNDAyIDY0LjkzN0M4MDYuNDA0IDYyLjEzODMgODA2LjkzOCA1OC45Mzk4IDgwNi45MzggNTUuMzQxNEM4MDYuOTM4IDUxLjc0MyA4MDYuNDM4IDQ4LjU0NDUgODA1LjQwMiA0NS43NzkxQzgwNC40MDEgNDMuMDEzNyA4MDIuODk4IDQwLjg0OCA4MDAuOTYyIDM5LjI0ODhDNzk4Ljk5MiAzNy42ODI4IDc5Ni41ODcgMzYuODgzMiA3OTMuNjQ5IDM2Ljg4MzJDNzkwLjcxMSAzNi44ODMyIDc4OC40MDcgMzcuNjQ5NSA3ODYuNDA0IDM5LjE4MjFDNzg0LjQgNDAuNzE0OCA3ODIuODk4IDQyLjg0NzEgNzgxLjg2MiA0NS41NzkyQzc4MC44MjcgNDguMzExMyA3ODAuMzI2IDUxLjU3NjUgNzgwLjMyNiA1NS4zMDgxQzc4MC4zMjYgNTkuMDM5NyA3ODAuODYxIDYyLjI3MTYgNzgxLjg5NiA2NS4wMzdDNzgyLjkzMSA2Ny44MDI0IDc4NC40NjcgNjkuOTY4MSA3ODYuNDcgNzEuNTM0Qzc4OC40NzQgNzMuMDY2NiA3OTAuODQ0IDczLjg2NjMgNzkzLjY0OSA3My44NjYzWiIgZmlsbD0iI0YyRjJGMiIvPgo8cGF0aCBkPSJNODU1LjU1NCAzLjg2NDkxVjg2LjEyNzNIODM4Ljk1OVYzLjg2NDkxSDg1NS41NTRaIiBmaWxsPSIjRjJGMkYyIi8+CjxwYXRoIGQ9Ik05MDAuNzMxIDg3LjMyNjhDODk0LjUyMSA4Ny4zMjY4IDg4OS4xNzggODUuOTk0MSA4ODQuNjM3IDgzLjMyODZDODgwLjA5NiA4MC42NjMyIDg3Ni41OSA3Ni45MzE1IDg3NC4xNTMgNzIuMTY3Qzg3MS43MTUgNjcuNDAyNiA4NzAuNDggNjEuODM4NCA4NzAuNDggNTUuNTA4Qzg3MC40OCA0OS4xNzc1IDg3MS43MTUgNDMuNTEzNSA4NzQuMTUzIDM4Ljc0OUM4NzYuNTkgMzMuOTg0NSA4ODAuMDk2IDMwLjI1MjkgODg0LjYzNyAyNy41ODc0Qzg4OS4xNzggMjQuOTIyIDg5NC41NTQgMjMuNTg5MiA5MDAuNzMxIDIzLjU4OTJDOTA2LjkwOSAyMy41ODkyIDkxMi4zNTEgMjQuOTIyIDkxNi44NTkgMjcuNTg3NEM5MjEuMzY2IDMwLjI1MjkgOTI0Ljg3MiAzMy45ODQ1IDkyNy4zMSAzOC43NDlDOTI5Ljc0NyA0My41MTM1IDkzMC45ODMgNDkuMTEwOSA5MzAuOTgzIDU1LjUwOEM5MzAuOTgzIDYxLjkwNTEgOTI5Ljc0NyA2Ny40MDI2IDkyNy4zMSA3Mi4xNjdDOTI0Ljg3MiA3Ni45MzE1IDkyMS4zNjYgODAuNjYzMiA5MTYuODU5IDgzLjMyODZDOTEyLjM1MSA4NS45OTQxIDkwNi45NzUgODcuMzI2OCA5MDAuNzMxIDg3LjMyNjhaTTkwMC43MzEgNzQuMjk5NEM5MDMuNjcgNzQuMjk5NCA5MDYuMTQxIDczLjQ2NjUgOTA4LjE0NCA3MS44MzM5QzkxMC4xNDcgNzAuMjAxMyA5MTEuNjE3IDY3LjkzNTYgOTEyLjYxOCA2NS4xMDM2QzkxMy42MiA2Mi4yMzgzIDkxNC4xMjEgNTkuMDM5NyA5MTQuMTIxIDU1LjQ3NDdDOTE0LjEyMSA1MS45MDk2IDkxMy42MiA0OC41Nzc4IDkxMi42MTggNDUuNzQ1OEM5MTEuNjE3IDQyLjkxMzcgOTEwLjExNCA0MC42ODE0IDkwOC4xNDQgMzkuMDQ4OEM5MDYuMTQxIDM3LjQxNjMgOTAzLjY3IDM2LjYxNjYgOTAwLjczMSAzNi42MTY2Qzg5Ny43OTMgMzYuNjE2NiA4OTUuMzIyIDM3LjQxNjMgODkzLjM1MiAzOS4wNDg4Qzg5MS4zODIgNDAuNjgxNCA4ODkuODggNDIuODgwNCA4ODguOTExIDQ1Ljc0NThDODg3LjkxIDQ4LjU3NzggODg3LjQwOSA1MS44MDk3IDg4Ny40MDkgNTUuNDc0N0M4ODcuNDA5IDU5LjEzOTcgODg3LjkxIDYyLjI3MTYgODg4LjkxMSA2NS4xMDM2Qzg4OS45MTMgNjcuOTY5IDg5MS4zODIgNzAuMjAxMyA4OTMuMzUyIDcxLjgzMzlDODk1LjMyMiA3My40NjY1IDg5Ny43OTMgNzQuMjk5NCA5MDAuNzMxIDc0LjI5OTRaIiBmaWxsPSIjRjJGMkYyIi8+CjxwYXRoIGQ9Ik05MzguOTMgODYuMTI3M0w5NjIuOTA0IDQ3Ljk3ODFMOTYyLjgzNyA2MC45MDU1TDk0MC4xNjUgMjQuNDIyMkg5NTguMDk2TDk2My42NzIgMzQuMTUxMUM5NjUuNDQxIDM3LjM0OTYgOTY3LjA0NCA0MC41MTQ4IDk2OC40NDcgNDMuNjEzNEM5NjkuODgyIDQ2LjcxMiA5NzEuMzE4IDQ5Ljc0MzkgOTcyLjc4NyA1Mi43MDkzSDk2Ni40NzdDOTY3Ljk3OSA0OS44MTA2IDk2OS40NDggNDYuNzc4NiA5NzAuODUxIDQzLjY0NjdDOTcyLjI1MyA0MC41MTQ4IDk3My44ODkgMzcuMzQ5NiA5NzUuNzI2IDM0LjE1MTFMOTgxLjUzNSAyNC40MjIySDk5OS4xMzJMOTc1Ljk5MyA2MS4wNzIxVjQ4LjMxMTNMMTAwMCA4Ni4xMjczSDk4Mi4xN0w5NzUuMzI1IDc0LjUzMjZDOTczLjUyMiA3MS4zNjc0IDk3MS44ODYgNjguMjM1NSA5NzAuNDE3IDY1LjEwMzZDOTY4Ljk0NyA2MS45NzE3IDk2Ny40NzggNTguOTczMSA5NjUuOTc2IDU2LjEwNzdIOTcyLjM1M0M5NzAuOTE3IDU4Ljk3MzEgOTY5LjUxNSA2MS45NzE3IDk2OC4xMTMgNjUuMTAzNkM5NjYuNzQ0IDY4LjIzNTUgOTY1LjE0MSA3MS4zNjc0IDk2My4zNzEgNzQuNTMyNkw5NTYuNTI2IDg2LjEyNzNIOTM4LjkzWiIgZmlsbD0iI0YyRjJGMiIvPgo8cGF0aCBkPSJNMzk0LjcwNCAxOTYuNDQ0QzM4OC4xNiAxOTYuNDQ0IDM4Mi4zMTcgMTk0Ljk3OCAzNzcuMTc1IDE5Mi4wMTJDMzcxLjk5OSAxODkuMDQ3IDM2Ny45MjUgMTg0Ljc0OSAzNjQuOTU0IDE3OS4xMThDMzYxLjk4MiAxNzMuNDg3IDM2MC40NzkgMTY2LjY5MSAzNjAuNDc5IDE1OC43MjhDMzYwLjQ3OSAxNTAuNzY0IDM2MS45ODIgMTQzLjkwMSAzNjQuOTg3IDEzOC4yN0MzNjcuOTkyIDEzMi42MzkgMzcyLjA2NiAxMjguMzA4IDM3Ny4yNzUgMTI1LjM0M0MzODIuNDUgMTIyLjM3NyAzODguMjkzIDEyMC45MTEgMzk0LjczOCAxMjAuOTExQzM5OC45MTIgMTIwLjkxMSA0MDIuODE4IDEyMS41MTEgNDA2LjQ1OCAxMjIuNjc3QzQxMC4wNjQgMTIzLjg0MyA0MTMuMjY5IDEyNS41NDMgNDE2LjA3NCAxMjcuNzc1QzQxOC44NzkgMTMwLjAwNyA0MjEuMTgzIDEzMi43MzkgNDIyLjk1MiAxMzYuMDA1QzQyNC43MjIgMTM5LjIzNiA0MjUuODkxIDE0Mi45MzUgNDI2LjQ1OCAxNDcuMUg0MTEuMTY2QzQxMC44MzIgMTQ1LjA2NyA0MTAuMTk3IDE0My4yNjggNDA5LjI2MiAxNDEuNzAyQzQwOC4zMjggMTQwLjEzNiA0MDcuMTU5IDEzOC44MDMgNDA1Ljc1NiAxMzcuNzA0QzQwNC4zNTQgMTM2LjYwNCA0MDIuNzUxIDEzNS43NzEgNDAwLjkxNSAxMzUuMTcyQzM5OS4xMTIgMTM0LjYwNSAzOTcuMTQyIDEzNC4zMDUgMzk1LjAzOCAxMzQuMzA1QzM5MS4xOTggMTM0LjMwNSAzODcuODU5IDEzNS4yNzIgMzg0Ljk1NCAxMzcuMTcxQzM4Mi4wODMgMTM5LjA3IDM3OS44MTIgMTQxLjg2OSAzNzguMjEgMTQ1LjVDMzc2LjYwNyAxNDkuMTMyIDM3NS44MDYgMTUzLjU2MyAzNzUuODA2IDE1OC43NjFDMzc1LjgwNiAxNjMuOTU4IDM3Ni42MDcgMTY4LjUyMyAzNzguMjQzIDE3Mi4xNTVDMzc5Ljg0NiAxNzUuNzg2IDM4Mi4xMTYgMTc4LjUxOCAzODQuOTg4IDE4MC4zNTFDMzg3Ljg1OSAxODIuMTgzIDM5MS4xOTggMTgzLjExNiAzOTQuOTcxIDE4My4xMTZDMzk3LjA3NSAxODMuMTE2IDM5OS4wNDUgMTgyLjgxNyA0MDAuODQ4IDE4Mi4yNUM0MDIuNjUxIDE4MS42ODQgNDA0LjI1NCAxODAuODUxIDQwNS42OSAxNzkuNzE4QzQwNy4xMjUgMTc4LjYxOCA0MDguMzI4IDE3Ny4yODYgNDA5LjI2MiAxNzUuNjg2QzQxMC4xOTcgMTc0LjEyIDQxMC44NjUgMTcyLjMyMSA0MTEuMjMyIDE3MC4yODlINDI2LjUyNUM0MjYuMTI0IDE3My43MjEgNDI1LjEyMyAxNzYuOTg2IDQyMy40ODcgMTgwLjExOEM0MjEuODUxIDE4My4yNSA0MTkuNjggMTg2LjA0OCA0MTYuOTc2IDE4OC41MTRDNDE0LjI3MSAxOTAuOTc5IDQxMS4wNjUgMTkyLjkxMiA0MDcuMzI2IDE5NC4zNDVDNDAzLjU4NiAxOTUuNzQ0IDM5OS40MTIgMTk2LjQ3NyAzOTQuNzcxIDE5Ni40NzdMMzk0LjcwNCAxOTYuNDQ0WiIgZmlsbD0iI0YyRjJGMiIvPgo8cGF0aCBkPSJNNDY4LjU2MyAxOTYuNjc3QzQ2Mi4zNTMgMTk2LjY3NyA0NTcuMDEgMTk1LjM0NCA0NTIuNDY5IDE5Mi42NzlDNDQ3LjkyOCAxOTAuMDEzIDQ0NC40MjIgMTg2LjI4MiA0NDEuOTg1IDE4MS41MTdDNDM5LjU0NyAxNzYuNzUzIDQzOC4zMTIgMTcxLjE4OSA0MzguMzEyIDE2NC44NThDNDM4LjMxMiAxNTguNTI4IDQzOS41NDcgMTUyLjg2NCA0NDEuOTg1IDE0OC4wOTlDNDQ0LjQyMiAxNDMuMzM1IDQ0Ny45MjggMTM5LjYwMyA0NTIuNDY5IDEzNi45MzdDNDU3LjAxIDEzNC4yNzIgNDYyLjM4NiAxMzIuOTM5IDQ2OC41NjMgMTMyLjkzOUM0NzQuNzQgMTMyLjkzOSA0ODAuMTgzIDEzNC4yNzIgNDg0LjY5MSAxMzYuOTM3QzQ4OS4xOTggMTM5LjYwMyA0OTIuNzA0IDE0My4zMzUgNDk1LjE0MiAxNDguMDk5QzQ5Ny41NzkgMTUyLjg2NCA0OTguODE1IDE1OC40NjEgNDk4LjgxNSAxNjQuODU4QzQ5OC44MTUgMTcxLjI1NSA0OTcuNTc5IDE3Ni43NTMgNDk1LjE0MiAxODEuNTE3QzQ5Mi43MDQgMTg2LjI4MiA0ODkuMTk4IDE5MC4wMTMgNDg0LjY5MSAxOTIuNjc5QzQ4MC4xODMgMTk1LjM0NCA0NzQuODA3IDE5Ni42NzcgNDY4LjU2MyAxOTYuNjc3Wk00NjguNTYzIDE4My42NDlDNDcxLjUwMiAxODMuNjQ5IDQ3My45NzIgMTgyLjgxNyA0NzUuOTc2IDE4MS4xODRDNDc3Ljk3OSAxNzkuNTUxIDQ3OS40NDggMTc3LjI4NiA0ODAuNDUgMTc0LjQ1NEM0ODEuNDUyIDE3MS41ODggNDgxLjk1MyAxNjguMzkgNDgxLjk1MyAxNjQuODI1QzQ4MS45NTMgMTYxLjI2IDQ4MS40NTIgMTU3LjkyOCA0ODAuNDUgMTU1LjA5NkM0NzkuNDQ4IDE1Mi4yNjQgNDc3Ljk0NiAxNTAuMDMyIDQ3NS45NzYgMTQ4LjM5OUM0NzMuOTcyIDE0Ni43NjYgNDcxLjUwMiAxNDUuOTY3IDQ2OC41NjMgMTQ1Ljk2N0M0NjUuNjI1IDE0NS45NjcgNDYzLjE1NCAxNDYuNzY2IDQ2MS4xODQgMTQ4LjM5OUM0NTkuMjE0IDE1MC4wMzIgNDU3LjcxMSAxNTIuMjMxIDQ1Ni43NDMgMTU1LjA5NkM0NTUuNzQxIDE1Ny45MjggNDU1LjI0MSAxNjEuMTYgNDU1LjI0MSAxNjQuODI1QzQ1NS4yNDEgMTY4LjQ5IDQ1NS43NDEgMTcxLjYyMiA0NTYuNzQzIDE3NC40NTRDNDU3Ljc0NSAxNzcuMzE5IDQ1OS4yMTQgMTc5LjU1MSA0NjEuMTg0IDE4MS4xODRDNDYzLjE1NCAxODIuODE3IDQ2NS42MjUgMTgzLjY0OSA0NjguNTYzIDE4My42NDlaIiBmaWxsPSIjRjJGMkYyIi8+CjxwYXRoIGQ9Ik01MTMuODA3IDE5NS40NzdWMTMzLjczOUg1MjkuMkw1MzAuMDM0IDE0OS4wOTlINTI4LjgzMkM1MjkuODAxIDE0NS4zIDUzMS4yMDMgMTQyLjIwMiA1MzMuMDczIDEzOS44MzZDNTM0Ljk0MyAxMzcuNDM3IDUzNy4xMTMgMTM1LjY3MSA1MzkuNjE3IDEzNC41MzlDNTQyLjEyMiAxMzMuNDA2IDU0NC43NTkgMTMyLjgzOSA1NDcuNTMxIDEzMi44MzlDNTUyLjAwNSAxMzIuODM5IDU1NS41NzggMTM0LjIzOSA1NTguMzE2IDEzNy4wNzFDNTYxLjA1NCAxMzkuOTAzIDU2My4wNTcgMTQ0LjIzNCA1NjQuMzU5IDE1MC4xMzFINTYyLjQyM0M1NjMuMzU4IDE0Ni4yIDU2NC44NiAxNDIuOTM1IDU2Ni45MyAxNDAuNDAzQzU2OS4wMDEgMTM3LjgzNyA1NzEuNDcyIDEzNS45MzggNTc0LjM0MyAxMzQuNzA1QzU3Ny4yMTUgMTMzLjQ3MiA1ODAuMTg2IDEzMi44MzkgNTgzLjMyNSAxMzIuODM5QzU4Ny4xMzIgMTMyLjgzOSA1OTAuNTA0IDEzMy42NzIgNTkzLjQ3NiAxMzUuMzM4QzU5Ni40NDcgMTM3LjAwNCA1OTguNzg1IDEzOS4zNyA2MDAuNDg4IDE0Mi41MDJDNjAyLjE5IDE0NS42IDYwMy4wNTkgMTQ5LjM5OCA2MDMuMDU5IDE1My44OTZWMTk1LjUxMUg1ODYuNDY0VjE1Ny4wMjhDNTg2LjQ2NCAxNTMuNTMgNTg1LjUyOSAxNTAuOTMxIDU4My42MjYgMTQ5LjIzMkM1ODEuNzIyIDE0Ny41MzMgNTc5LjM4NSAxNDYuNyA1NzYuNjE0IDE0Ni43QzU3NC41NDMgMTQ2LjcgNTcyLjc0IDE0Ny4xNjYgNTcxLjIwNCAxNDguMDY2QzU2OS42NjkgMTQ4Ljk2NSA1NjguNSAxNTAuMjMxIDU2Ny42NjUgMTUxLjg2NEM1NjYuODMgMTUzLjQ5NyA1NjYuNDMgMTU1LjM5NiA1NjYuNDMgMTU3LjU2MVYxOTUuNTQ0SDU1MC4zNjlWMTU2LjYyOEM1NTAuMzY5IDE1My41OTcgNTQ5LjQ2NyAxNTEuMTk4IDU0Ny42OTggMTQ5LjQzMkM1NDUuODk1IDE0Ny42MzMgNTQzLjU5MSAxNDYuNzY2IDU0MC43NTMgMTQ2Ljc2NkM1MzguNzgzIDE0Ni43NjYgNTM3LjA0NiAxNDcuMTk5IDUzNS40NzcgMTQ4LjA5OUM1MzMuOTA4IDE0OC45OTkgNTMyLjY3MiAxNTAuMjY1IDUzMS43NzEgMTUxLjk5N0M1MzAuODY5IDE1My42OTYgNTMwLjQwMiAxNTUuNzk2IDUzMC40MDIgMTU4LjI2MVYxOTUuNTc3SDUxMy44MDdWMTk1LjQ3N1oiIGZpbGw9IiNGMkYyRjIiLz4KPHBhdGggZD0iTTYyMC42MjIgMjE4LjU2N1YxMzMuNzcySDYzNi45NDlWMTQ0LjE2N0g2MzcuNzE3QzYzOC40ODUgMTQyLjUzNSA2MzkuNTg3IDE0MC44NjkgNjQxLjAyMyAxMzkuMTM2QzY0Mi40NTkgMTM3LjQwNCA2NDQuMzI5IDEzNS45MzggNjQ2LjYzMiAxMzQuNzcyQzY0OC45MzYgMTMzLjYwNiA2NTEuODc1IDEzMy4wMDYgNjU1LjM4MSAxMzMuMDA2QzY1OS45NTUgMTMzLjAwNiA2NjQuMTI5IDEzNC4xNzIgNjY3LjkzNSAxMzYuNTM4QzY3MS43NDIgMTM4LjkwMyA2NzQuNzggMTQyLjQzNSA2NzcuMDUxIDE0Ny4xMzNDNjc5LjMyMSAxNTEuODMxIDY4MC40NTcgMTU3LjcyOCA2ODAuNDU3IDE2NC43NThDNjgwLjQ1NyAxNzEuNzg4IDY3OS4zNTUgMTc3LjM4NiA2NzcuMTUxIDE4Mi4xMTdDNjc0Ljk0NyAxODYuODQ4IDY3MS45NDIgMTkwLjQ0NiA2NjguMTM2IDE5Mi44NzlDNjY0LjMyOSAxOTUuMzExIDY2MC4wNTUgMTk2LjU0NCA2NTUuMzE0IDE5Ni41NDRDNjUxLjk0MSAxOTYuNTQ0IDY0OS4xMDMgMTk1Ljk3NyA2NDYuNzk5IDE5NC44NDRDNjQ0LjQ2MiAxOTMuNzEyIDY0Mi41OTIgMTkyLjMxMiA2NDEuMTIzIDE5MC42MTNDNjM5LjY1NCAxODguOTQ3IDYzOC41NTIgMTg3LjI4MSA2MzcuNzg0IDE4NS42MTVINjM3LjI4M1YyMTguNTY3SDYyMC42ODhINjIwLjYyMlpNNjUwLjEzOCAxODMuMjE2QzY1My4wMSAxODMuMjE2IDY1NS40NDcgMTgyLjQxNyA2NTcuNDE3IDE4MC44NTFDNjU5LjM4OCAxNzkuMjg1IDY2MC44OSAxNzcuMDg2IDY2MS44OTIgMTc0LjI4N0M2NjIuODkzIDE3MS40ODggNjYzLjQyOCAxNjguMjkgNjYzLjQyOCAxNjQuNjkxQzY2My40MjggMTYxLjA5MyA2NjIuOTI3IDE1Ny44OTUgNjYxLjg5MiAxNTUuMTI5QzY2MC44OSAxNTIuMzY0IDY1OS4zODcgMTUwLjE5OCA2NTcuNDUxIDE0OC41OTlDNjU1LjQ4MSAxNDcuMDMzIDY1My4wNzcgMTQ2LjIzMyA2NTAuMTM4IDE0Ni4yMzNDNjQ3LjIgMTQ2LjIzMyA2NDQuODk2IDE0NyA2NDIuODkzIDE0OC41MzJDNjQwLjg4OSAxNTAuMDY1IDYzOS4zODcgMTUyLjE5NyA2MzguMzUyIDE1NC45MjlDNjM3LjMxNyAxNTcuNjYxIDYzNi44MTYgMTYwLjkyNyA2MzYuODE2IDE2NC42NThDNjM2LjgxNiAxNjguMzkgNjM3LjM1IDE3MS42MjIgNjM4LjM4NSAxNzQuMzg3QzYzOS40MiAxNzcuMTUyIDY0MC45NTYgMTc5LjMxOCA2NDIuOTYgMTgwLjg4NEM2NDQuOTYzIDE4Mi40MTcgNjQ3LjMzNCAxODMuMjE2IDY1MC4xMzggMTgzLjIxNloiIGZpbGw9IiNGMkYyRjIiLz4KPHBhdGggZD0iTTcxMy44MTMgMTk2LjY3N0M3MDkuOTA3IDE5Ni42NzcgNzA2LjQwMSAxOTUuOTc3IDcwMy4yNjIgMTk0LjYxMUM3MDAuMTU3IDE5My4yNDUgNjk3LjY4NiAxOTEuMTc5IDY5NS45MTYgMTg4LjQxNEM2OTQuMTEzIDE4NS42ODIgNjkzLjI0NSAxODIuMjUgNjkzLjI0NSAxNzguMTg1QzY5My4yNDUgMTc0Ljc1NCA2OTMuODggMTcxLjg4OCA2OTUuMTQ4IDE2OS41NTZDNjk2LjQxNyAxNjcuMjI0IDY5OC4xNTMgMTY1LjM5MSA3MDAuMzU3IDE2My45OTJDNzAyLjU2MSAxNjIuNTkyIDcwNS4wMzIgMTYxLjUyNiA3MDcuODM3IDE2MC43OTNDNzEwLjYwOCAxNjAuMDYgNzEzLjU0NiAxNTkuNTI3IDcxNi42MTggMTU5LjI2MUM3MjAuMTkxIDE1OC44OTQgNzIzLjA5NiAxNTguNTYxIDcyNS4yNjYgMTU4LjIyOEM3MjcuNDcgMTU3LjkyOCA3MjkuMDczIDE1Ny40MjggNzMwLjA3NCAxNTYuNzI4QzczMS4wNzYgMTU2LjA2MiA3MzEuNjEgMTU1LjAyOSA3MzEuNjEgMTUzLjczVjE1My40NjNDNzMxLjYxIDE1MS42OTcgNzMxLjI0MyAxNTAuMTk4IDczMC41MDggMTQ4Ljk5OUM3MjkuNzc0IDE0Ny43OTkgNzI4LjY3MiAxNDYuODY2IDcyNy4yMDMgMTQ2LjJDNzI1LjczNCAxNDUuNTY3IDcyMy45OTcgMTQ1LjIzNCA3MjEuOTI3IDE0NS4yMzRDNzE5Ljg1NyAxNDUuMjM0IDcxNy45MiAxNDUuNTY3IDcxNi4zNTEgMTQ2LjJDNzE0Ljc0OCAxNDYuODMzIDcxMy40OCAxNDcuNjk5IDcxMi40NzggMTQ4Ljc2NUM3MTEuNDc2IDE0OS44MzIgNzEwLjc0MiAxNTEuMDMxIDcxMC4yNzQgMTUyLjM2NEw2OTUuMDQ4IDE0OS44NjVDNjk2LjExNyAxNDYuMjY3IDY5Ny44ODYgMTQzLjIwMSA3MDAuMzU3IDE0MC43MDJDNzAyLjgyOCAxMzguMjA0IDcwNS45IDEzNi4yNzEgNzA5LjU3MyAxMzQuOTcyQzcxMy4yNDYgMTMzLjYzOSA3MTcuMzg2IDEzMi45NzMgNzIxLjk5NCAxMzIuOTczQzcyNS4zIDEzMi45NzMgNzI4LjUzOCAxMzMuMzcyIDczMS42NzcgMTM0LjE3MkM3MzQuODE2IDEzNC45NzIgNzM3LjYyMSAxMzYuMTcxIDc0MC4xMjUgMTM3LjgzN0M3NDIuNjI5IDEzOS41MDMgNzQ0LjU5OSAxNDEuNjY5IDc0Ni4wMzUgMTQ0LjMzNEM3NDcuNTA0IDE0NyA3NDguMjA1IDE1MC4xOTggNzQ4LjIwNSAxNTMuODk2VjE5NS40NzdINzMyLjQ3OFYxODYuOTE1SDczMS45MTFDNzMwLjkwOSAxODguODE0IDcyOS41NzQgMTkwLjUxMyA3MjcuOTM3IDE5MS45NzlDNzI2LjI2OCAxOTMuNDQ1IDcyNC4yNjUgMTk0LjU3OCA3MjEuOTI3IDE5NS40NDRDNzE5LjU5IDE5Ni4yNzcgNzE2Ljg4NSAxOTYuNzEgNzEzLjgxMyAxOTYuNzFWMTk2LjY3N1pNNzE4LjUyMSAxODUuMDQ5QzcyMS4xMjYgMTg1LjA0OSA3MjMuNDMgMTg0LjU0OSA3MjUuNCAxODMuNTE2QzcyNy4zNyAxODIuNDgzIDcyOC45MDYgMTgxLjA4NCA3MzAuMDA4IDE3OS4zMThDNzMxLjExIDE3Ny41NTIgNzMxLjY3NyAxNzUuNTg2IDczMS42NzcgMTczLjQyMVYxNjYuNzI0QzczMS4yMSAxNjcuMDkgNzMwLjQ3NSAxNjcuNDI0IDcyOS40NzMgMTY3LjcyM0M3MjguNDcyIDE2OC4wMjMgNzI3LjM3IDE2OC4yOSA3MjYuMTY4IDE2OC40OUM3MjQuOTY2IDE2OC43MjMgNzIzLjc2NCAxNjguOTIzIDcyMi41NjIgMTY5LjA4OUM3MjEuMzkzIDE2OS4yODkgNzIwLjMyNSAxNjkuNDIzIDcxOS40MjMgMTY5LjUyM0M3MTcuMzg2IDE2OS44MjIgNzE1LjYxNyAxNzAuMjg5IDcxNC4wNDcgMTcwLjk1NUM3MTIuNTExIDE3MS42MjIgNzExLjMwOSAxNzIuNDg4IDcxMC40NDEgMTczLjU4N0M3MDkuNjA2IDE3NC42ODcgNzA5LjE3MiAxNzYuMDUzIDcwOS4xNzIgMTc3Ljc1MkM3MDkuMTcyIDE3OS4zNTEgNzA5LjU3MyAxODAuNjg0IDcxMC4zNzQgMTgxLjc1QzcxMS4xNzYgMTgyLjg1IDcxMi4yNzggMTgzLjY0OSA3MTMuNjggMTg0LjIxNkM3MTUuMDgyIDE4NC43ODIgNzE2LjY4NSAxODUuMDQ5IDcxOC40ODggMTg1LjA0OUg3MTguNTIxWiIgZmlsbD0iI0YyRjJGMiIvPgo8cGF0aCBkPSJNNzgyLjMzIDE1OS43NlYxOTUuNDc3SDc2NS43MzVWMTMzLjczOUg3ODEuMzk1TDc4MS42NjIgMTQ5LjEzMkg3ODAuNjZDNzgyLjI5NiAxNDMuOTY4IDc4NC43MzQgMTQwLjAwMyA3ODguMDM5IDEzNy4xNzFDNzkxLjM0NSAxMzQuMzM5IDc5NS42MTkgMTMyLjkzOSA4MDAuODYxIDEzMi45MzlDODA1LjEzNSAxMzIuOTM5IDgwOC44NzUgMTMzLjg3MiA4MTIuMDggMTM1LjczOEM4MTUuMjg2IDEzNy42MDQgODE3Ljc1NyAxNDAuMjY5IDgxOS40OTMgMTQzLjczNEM4MjEuMjI5IDE0Ny4xOTkgODIyLjEzMSAxNTEuMzY0IDgyMi4xMzEgMTU2LjE5NVYxOTUuNDQ0SDgwNS41MzZWMTU5LjA2MUM4MDUuNTM2IDE1NS4yMjkgODA0LjUzNCAxNTIuMjMxIDgwMi41NjQgMTUwLjA2NUM4MDAuNTk0IDE0Ny44OTkgNzk3Ljg1NiAxNDYuOCA3OTQuMzUgMTQ2LjhDNzkyLjAxMyAxNDYuOCA3ODkuOTQzIDE0Ny4yOTkgNzg4LjE0IDE0OC4zMzJDNzg2LjMzNyAxNDkuMzY1IDc4NC45MDEgMTUwLjc5OCA3ODMuODY2IDE1Mi43M0M3ODIuODY0IDE1NC42MjkgNzgyLjMzIDE1Ni45OTUgNzgyLjMzIDE1OS43MjdWMTU5Ljc2WiIgZmlsbD0iI0YyRjJGMiIvPgo8cGF0aCBkPSJNODM3LjI5IDIxNy4zMzRMODQxLjA5NyAyMDQuODczTDg0My4xMzMgMjA1LjM3M0M4NDUuMzM3IDIwNS45NzMgODQ3LjMwNyAyMDYuMTM5IDg0OS4wNDMgMjA1Ljg3M0M4NTAuNzggMjA1LjYwNiA4NTIuMTgyIDIwNC45MDYgODUzLjIxNyAyMDMuNzc0Qzg1NC4yNTIgMjAyLjY0MSA4NTQuOTIgMjAxLjA0MiA4NTUuMTIgMTk4Ljk3Nkw4NTUuNTU0IDE5NS42NzdMODMyLjMxNSAxMzMuNzcySDg0OS45NzhMODYwLjM5NiAxNjUuNzkxQzg2MS42NjUgMTY5Ljg1NiA4NjIuNjY3IDE3My44ODcgODYzLjQ2OCAxNzcuOTUyQzg2NC4yNjkgMTgyLjAxNyA4NjUuMTcxIDE4Ni4yNDggODY2LjIwNiAxOTAuNjQ2SDg2Mi4zMzNDODYzLjMzNCAxODYuMjE1IDg2NC4zMzYgMTgxLjk4NCA4NjUuMzA0IDE3Ny45MTlDODY2LjMwNiAxNzMuODU0IDg2Ny40NzUgMTY5LjgyMiA4NjguNzc3IDE2NS43OTFMODc5LjYyOSAxMzMuNzcySDg5Ny4wNThMODcwLjc4IDIwMi43NzRDODY5LjUxMiAyMDYuMDczIDg2Ny45MDkgMjA4Ljk3MSA4NjUuOTcyIDIxMS4zN0M4NjQuMDAyIDIxMy44MDIgODYxLjU5OCAyMTUuNjY4IDg1OC42NiAyMTcuMDAxQzg1NS43NTUgMjE4LjMzNCA4NTIuMjE1IDIxOSA4NDguMDc1IDIxOUM4NDUuODcxIDIxOSA4NDMuODAxIDIxOC44MzMgODQxLjg2NSAyMTguNTM0QzgzOS45NjEgMjE4LjIzNCA4MzguMzkyIDIxNy44MzQgODM3LjIyMyAyMTcuMzM0SDgzNy4yOVoiIGZpbGw9IiNGMkYyRjIiLz4KPC9nPgo8ZGVmcz4KPGNsaXBQYXRoIGlkPSJjbGlwMF8xXzIyMCI+CjxyZWN0IHdpZHRoPSIxMDAwIiBoZWlnaHQ9IjIxOSIgZmlsbD0id2hpdGUiLz4KPC9jbGlwUGF0aD4KPC9kZWZzPgo8L3N2Zz4K" alt="Axur, an Infoblox company"></span>
+    <h1>What to run before the call</h1>
+    <p class="lede">Five searches and one download. They give you the numbers the customer
+      sees. Twenty minutes, the day before.</p>
+    <a class="pill" href="https://one.axur.com/threat-hunting" target="_blank" rel="noopener">
+      Open Threat Hunting <span class="arw">&#8599;</span></a>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section class="step">
+    <span class="num">01</span>
+    <h2>Type the customer</h2>
+    <p class="note">Every query below fills itself in. Copy stays shut until the field that
+      query needs has a value.</p>
+    <div class="fields">
+      <div><label for="brand">Brand, as Axur spells it</label>
+        <input id="brand" type="text" placeholder="Delta" autocomplete="off" spellcheck="false"></div>
+      <div><label for="domain">Domain</label>
+        <input id="domain" type="text" placeholder="delta.com" autocomplete="off" spellcheck="false"></div>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="num">02</span>
+    <h2>Run the five searches</h2>
+    <p class="note">All five run at <a class="link" href="https://one.axur.com/threat-hunting" target="_blank" rel="noopener"><code class="url">one.axur.com/threat-hunting</code> <span class="arw">&#8599;</span></a>.
+      <b>Set the source first.</b> It opens on Files, and the wrong one says Field not found.</p>
+    <div class="rows" id="rows">
+      <div class="row" data-src="Credentials" data-tpl='emailDomain="{DOMAIN}"'>
+        <div><div class="nm">Exposed credentials</div><div class="src">Credentials</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="Credentials" data-tpl='emailDomain="{DOMAIN}" AND passwordType="PLAIN"'>
+        <div><div class="nm">Passwords in readable form</div><div class="src">Credentials</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="URLs &amp; Domains" data-tpl='impersonatedBrandsHigh="{BRAND}"'>
+        <div><div class="nm">Impersonation sites</div><div class="src">URLs &amp; Domains</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="URLs &amp; Domains" data-tpl="sanitizedDomainLabel={LABEL}~1">
+        <div><div class="nm">Lookalike domains</div><div class="src">URLs &amp; Domains</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="URLs &amp; Domains" data-tpl="domainLabel={LABEL}~1 AND dnsRecordMX=*">
+        <div><div class="nm">Mail-enabled lookalikes</div><div class="src">URLs &amp; Domains</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+    </div>
+    <p class="note">Two of these mislead. <b>Impersonation sites</b> matches any brand whose
+      name contains the word, so read the Impersonated brand column and confirm the rows are
+      your customer. <b>Lookalike domains</b> uses the cleaned field; the plain field returns
+      thousands and is only useful with the mail-record filter attached.</p>
+  </section>
+
+  <section class="step">
+    <span class="num">03</span>
+    <h2>Download the attack surface</h2>
+    <ol class="plain">
+      <li>Open <a class="link" href="https://one.axur.com/easm" target="_blank" rel="noopener"><code class="url">one.axur.com/easm</code> <span class="arw">&#8599;</span></a> and switch to Exposures.</li>
+      <li>Open <b>Hostnames</b> and tick the customer's. There is no select-all.</li>
+      <li>Click <b>Download all</b>. The file arrives at once, holding exactly what the filter shows.</li>
+    </ol>
+    <p class="note">Do not screenshot the Risk Matrix for a customer. It ignores every filter
+      and always counts the whole tenant.</p>
+  </section>
+
+  <section class="step">
+    <span class="num">04</span>
+    <h2>Export the rows you need</h2>
+    <ol class="plain">
+      <li>Click <b>Export</b>, above the results table.</li>
+      <li>Type <b>1,000</b> in Quantity to be exported.</li>
+      <li>A link arrives by email, good for seven days. Nothing downloads on the spot.</li>
+    </ol>
+    <p class="note">One credit per hundred rows, counted on the rows that exist. The dialog
+      shows the cost before you commit.</p>
+  </section>
+
+  <section class="step">
+    <span class="num">05</span>
+    <h2>Send the count, not the passwords</h2>
+    <div class="warn">
+      <b>The export is not masked. The screen is.</b>
+      <p>On screen the Password column shows only the last character. The exported file and
+        the original source file do not. Send the customer the number, never the rows, unless
+        they asked and you have removed the column.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="num">06</span>
+    <h2>Or run all five at once</h2>
+    <p class="note">Only worth it for several customers, or a scheduled run. For one meeting
+      the Copy buttons are quicker.</p>
+    <ol class="plain">
+      <li>Axur, gear icon, <b>My preferences</b>, <b>API keys</b>, Generate New Key. Copy it
+        once; Axur never shows it again.</li>
+      <li>Download the script. It arrives with this customer already filled in.
+        <div class="getrow">
+          <button class="get" data-os="mac"><span class="arw">&#8595;</span> Download for macOS</button>
+          <button class="copy getcopy" data-os="mac">Copy the macOS script</button>
+        </div>
+        <div class="getrow">
+          <button class="get" data-os="win"><span class="arw">&#8595;</span> Download for Windows</button>
+          <button class="copy getcopy" data-os="win">Copy the Windows script</button>
+        </div>
+        <p class="note">If the download is blocked, copy instead and paste it into a new file:
+          <code>axur-report.sh</code> on a Mac, <code>axur-report.ps1</code> on Windows.</p>
+      </li>
+      <li>Paste one line. It asks for anything it needs and hides the key as you type.
+        <div class="cmd"><code id="cmd-mac">bash ~/Downloads/axur-report.sh</code>
+          <button class="copy" data-cmd="cmd-mac">Copy</button></div>
+        <div class="cmd"><code id="cmd-win">powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\Downloads\axur-report.ps1</code>
+          <button class="copy" data-cmd="cmd-win">Copy</button></div>
+      </li>
+    </ol>
+    <p class="note">Skip the questions with any of these. macOS only.</p>
+    <dl class="flags">
+      <dt>--brand "BRAND"</dt><dd>brand, as Axur spells it. Quote it only if it has a space</dd>
+      <dt>--domain customer.com</dt><dd>customer domain</dd>
+      <dt>--key YOUR_API_KEY</dt><dd>your API key</dd>
+      <dt>--rows 50</dt><dd>rows listed under each count</dd>
+      <dt>--no-pdf</dt><dd>write the HTML only</dd>
+      <dt>--no-open</dt><dd>print the path instead of opening it</dd>
+    </dl>
+    <div class="cmd"><code id="cmd-full">bash ~/Downloads/axur-report.sh --brand BRAND --domain customer.com --key YOUR_API_KEY</code>
+      <button class="copy" data-cmd="cmd-full">Copy</button></div>
+    <p class="note">It writes a summary page, then the records behind each number, and a PDF
+      if Chrome or Edge is installed. Passwords are never included. The Windows version
+      prints the counts only.</p>
+  </section>
+
+</div>
+</main>
+
+<footer><div class="wrap">
+  <p>Every step here was performed in one.axur.com on 28 August 2026.
+     Design values from Stripe's published specification, with Infoblox green in place of its indigo.</p>
+</div></footer>
+
+<script>
+(function(){
+  var brandI  = document.getElementById('brand');
+  var domainI = document.getElementById('domain');
+  var rows    = [].slice.call(document.querySelectorAll('.row[data-tpl]'));
+
+  // The fuzzy searches match a domain label, not a brand name, so the term is
+  // derived from the domain: "shop.customer.co.uk" gives "customer".
+  function labelFrom(d){
+    d = (d||'').trim().toLowerCase().replace(/^[a-z]+:\/\//,'').replace(/^www\./,'').split('/')[0];
+    if (!d) return '';
+    var parts = d.split('.').filter(Boolean);
+    if (parts.length > 2) parts = parts.slice(-3);
+    return parts[0] || '';
+  }
+  function values(){
+    var b = brandI.value.trim();
+    var d = domainI.value.trim().toLowerCase()
+              .replace(/^[a-z]+:\/\//,'').replace(/^www\./,'').split('/')[0];
+    return { BRAND: b || 'BRAND', DOMAIN: d || 'customer.com',
+             LABEL: labelFrom(domainI.value) || 'brand' };
+  }
+
+  function render(){
+    var v = values();
+    rows.forEach(function(row){
+      var tpl = row.getAttribute('data-tpl');
+      var box = row.querySelector('.q');
+      var plain = '';
+      box.textContent = '';
+      tpl.split(/(\{BRAND\}|\{DOMAIN\}|\{LABEL\})/).forEach(function(part){
+        var key = part.replace(/[{}]/g,'');
+        if (part.charAt(0) === '{' && v[key] !== undefined) {
+          var s = document.createElement('span');
+          s.className = 'slot'; s.textContent = v[key];
+          box.appendChild(s); plain += v[key];
+        } else if (part) {
+          box.appendChild(document.createTextNode(part)); plain += part;
+        }
+      });
+      row.setAttribute('data-plain', plain);
+
+      // A row is ready when the field its own query needs carries a value.
+      var needs = tpl.indexOf('{BRAND}') > -1 ? 'brand' : 'domain';
+      var ready = needs === 'brand' ? !!brandI.value.trim() : !!labelFrom(domainI.value);
+      row.setAttribute('data-ready', ready ? '1' : '0');
+      var btn = row.querySelector('.copy');
+      // aria-disabled, not disabled: the button stays reachable by keyboard
+      // and can say why it will not copy.
+      btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
+    });
+    var f = document.getElementById('cmd-full');
+    if (f) {
+      var b = v.BRAND.indexOf(' ') > -1 ? '"' + v.BRAND + '"' : v.BRAND;
+      f.textContent = 'bash ~/Downloads/axur-report.sh --brand ' + b +
+                      ' --domain ' + v.DOMAIN + ' --key YOUR_API_KEY';
+    }
+    try { localStorage.setItem('axur-sheet', JSON.stringify({b:brandI.value, d:domainI.value})); } catch(e){}
+  }
+
+  try {
+    var saved = JSON.parse(localStorage.getItem('axur-sheet') || '{}');
+    if (saved.b) brandI.value = saved.b;
+    if (saved.d) domainI.value = saved.d;
+  } catch(e){}
+  brandI.addEventListener('input', render);
+  domainI.addEventListener('input', render);
+  render();
+
+  function copy(text){
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function(res, rej){
+      var t = document.createElement('textarea');
+      t.value = text; t.setAttribute('readonly',''); t.style.position='fixed'; t.style.top='-1000px';
+      document.body.appendChild(t); t.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch(e){}
+      document.body.removeChild(t);
+      ok ? res() : rej();
+    });
+  }
+  function flash(btn, word){
+    var was = 'Copy';
+    btn.textContent = word;
+    setTimeout(function(){ btn.textContent = was; }, 1600);
+  }
+
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('button.copy');
+    if (b && b.classList.contains('getcopy')) b = null;   // handled further down
+    if (b) {
+      var id = b.getAttribute('data-cmd');
+      if (id) {
+        copy(document.getElementById(id).textContent)
+          .then(function(){ flash(b,'Copied'); })
+          .catch(function(){ flash(b,'Select it'); });
+        return;
+      }
+      var row = b.closest('.row');
+      if (row.getAttribute('data-ready') === '0') {
+        var need = row.getAttribute('data-tpl').indexOf('{BRAND}') > -1 ? 'brand' : 'domain';
+        flash(b, 'Type the ' + need);
+        (need === 'brand' ? brandI : domainI).focus();
+        return;
+      }
+      copy(row.getAttribute('data-plain'))
+        .then(function(){ flash(b,'Copied'); })
+        .catch(function(){ flash(b,'Select it'); });
+      return;
+    }
+    var gc = e.target.closest('button.getcopy');
+    if (gc) {
+      var sc = scripts();
+      copy(gc.getAttribute('data-os') === 'mac' ? sc.mac : sc.win)
+        .then(function(){ gc.textContent = 'Copied'; })
+        .catch(function(){ gc.textContent = 'Select it'; });
+      setTimeout(function(){
+        gc.textContent = gc.getAttribute('data-os') === 'mac'
+          ? 'Copy the macOS script' : 'Copy the Windows script';
+      }, 1600);
+      return;
+    }
+    var g = e.target.closest('button.get');
+    if (g) {
+      var s = scripts();
+      if (g.getAttribute('data-os') === 'mac') save('axur-report.sh', s.mac);
+      else save('axur-report.ps1', s.win);
+      var was = g.textContent;
+      g.textContent = 'Downloaded';
+      setTimeout(function(){ g.textContent = was; }, 1600);
+    }
+  });
+
+  function save(name, text){
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], {type:'text/plain'}));
+    a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  }
+
+  function scripts(){
+    // the Windows script is written with this customer already in it
+    var v = values();
+    var sh = [
+      '#!/bin/bash',
+      '# Axur pre-meeting report.',
+      '#',
+      '#   bash axur-report.sh',
+      '#   bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY',
+      '#',
+      '# Anything you leave off, it asks for.',
+      '#',
+      '#   --rows N          rows to pull behind each number (default 50)',
+      '#   --out FILE        output file (default axur-report-<domain>.html)',
+      '#   --no-pdf          write only the HTML',
+      '#   --no-open         do not open the report when it is done',
+      '#   --debug           show the raw replies',
+      '',
+      'API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"',
+      'BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""',
+      '',
+      'while [ $# -gt 0 ]; do',
+      '  case "$1" in',
+      '    --brand)      BRAND="$2"; shift 2 ;;',
+      '    --domain)     DOMAIN="$2"; shift 2 ;;',
+      '    --key)        KEY="$2"; shift 2 ;;',
+      '    --rows)       ROWS="$2"; shift 2 ;;',
+      '    --brandfetch) BFID="$2"; shift 2 ;;',
+      '    --out)        OUT="$2"; shift 2 ;;',
+      '    --debug)      DEBUG=1; shift ;;',
+      '    --no-pdf)     NOPDF=1; shift ;;',
+      '    --no-open)    NOOPEN=1; shift ;;',
+      '    -h|--help)    sed -n \'2,13p\' "$0"; exit 0 ;;',
+      '    *)            echo "Unknown option: $1" >&2; exit 1 ;;',
+      '  esac',
+      'done',
+      '',
+      'ask() { # ask VAR flag "prompt" [hidden]',
+      '  eval "V=\\$$1"',
+      '  [ -n "$V" ] && return',
+      '  if [ ! -t 0 ]; then echo "Missing --$2, and there is no terminal to ask on." >&2; exit 1; fi',
+      '  if [ -n "$4" ]; then printf \'%s: \' "$3" >&2; read -r -s A; printf \'\\n\' >&2',
+      '  else printf \'%s: \' "$3" >&2; read -r A; fi',
+      '  eval "$1=\\$A"',
+      '}',
+      'ask BRAND  brand  "Customer brand, as Axur spells it"',
+      'ask DOMAIN domain "Customer domain"',
+      'ask KEY    key    "Axur API key (input hidden)" hidden',
+      'if [ -z "$BRAND" ] || [ -z "$DOMAIN" ] || [ -z "$KEY" ]; then',
+      '  echo "Brand, domain and key are all needed." >&2; exit 1',
+      'fi',
+      '',
+      'DOMAIN=$(printf \'%s\' "$DOMAIN" | tr \'A-Z\' \'a-z\' | sed \'s#^[a-z]*://##; s/^www\\.//; s#/.*##\')',
+      'LABEL=$(printf \'%s\' "$DOMAIN" | cut -d. -f1)',
+      '[ -z "$OUT" ] && OUT="axur-report-$LABEL.html"',
+      '',
+      '# Brandfetch serves a real logo when the page sends a Referer. A file opened',
+      '# straight off disk does not, so the cover writes the name out instead.',
+      'if [ -n "$BFID" ]; then',
+      '  LOGO="https://cdn.brandfetch.io/$DOMAIN/w/400/h/400?c=$BFID"',
+      '  OURS="https://cdn.brandfetch.io/infoblox.com/w/400/h/400?c=$BFID"',
+      'else',
+      '  LOGO="https://cdn.brandfetch.io/$DOMAIN/w/400/h/400"',
+      '  OURS="https://cdn.brandfetch.io/infoblox.com/w/400/h/400"',
+      'fi',
+      '',
+      'TMP=$(mktemp -d)',
+      'trap \'rm -rf "$TMP"\' EXIT',
+      'N=0',
+      '',
+      '# Fetch the logo here rather than leaving it to the reader\'s browser. Brandfetch',
+      '# serves the real image to a request carrying a Referer, so curl gets it; baking',
+      '# it into the file as a data URI means it also survives the PDF, an offline',
+      '# mailbox, and a reader with images blocked. A miss leaves LOGO_DATA empty and',
+      '# the cover writes the company name instead, exactly as before.',
+      'fetch_logo() { # fetch_logo URL FILE  -> prints a data URI, or nothing',
+      '  CT=$(curl -sL --max-time 12 -o "$2" -w \'%{content_type}\' \\',
+      '        -H "Referer: https://one.axur.com/" \\',
+      '        -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36" \\',
+      '        -H "Accept: image/avif,image/webp,image/png,image/*,*/*;q=0.8" \\',
+      '        "$1" 2>/dev/null)',
+      '  case "$CT" in',
+      '    image/*) [ -s "$2" ] && printf \'data:%s;base64,%s\' "${CT%%;*}" "$(base64 < "$2" | tr -d \'\\n\')" ;;',
+      '  esac',
+      '}',
+      'printf \'Logo\'',
+      'LOGO_DATA=$(fetch_logo "$LOGO" "$TMP/logo.bin")',
+      'OURS_DATA=$(fetch_logo "$OURS" "$TMP/ours.bin")',
+      '[ -n "$LOGO_DATA" ] && LOGO="$LOGO_DATA"',
+      '[ -n "$OURS_DATA" ] && OURS="$OURS_DATA"',
+      'if [ -n "$LOGO_DATA" ]; then echo " ... got $BRAND"; else echo " ... none for $DOMAIN, the name will be written instead"; fi',
+      '',
+      'run() { # run NAME SOURCE QUERY',
+      '  NAME="$1"; SOURCE="$2"; QUERY="$3"; N=$((N+1))',
+      '  printf \'%-26s\' "$NAME"',
+      '  ESC=$(printf \'%s\' "$QUERY" | sed \'s/\\\\/\\\\\\\\/g; s/"/\\\\"/g\')',
+      '  BODY=$(printf \'{"query":"%s","source":"%s"}\' "$ESC" "$SOURCE")',
+      '  ATTEMPT=0',
+      '  while :; do',
+      '    RAW=$(curl -s -w \'\\n%{http_code}\' -X POST "$API/search" -H "Authorization: Bearer $KEY" \\',
+      '          -H "Content-Type: application/json" -d "$BODY")',
+      '    CODE=$(printf \'%s\' "$RAW" | tail -n1); START=$(printf \'%s\' "$RAW" | sed \'$d\')',
+      '    # the gateway allows 30 calls a window, so wait it out rather than failing',
+      '    if [ "$CODE" = "429" ] && [ "$ATTEMPT" -lt 3 ]; then',
+      '      ATTEMPT=$((ATTEMPT+1)); printf \'w\'; sleep 25; continue',
+      '    fi',
+      '    break',
+      '  done',
+      '  [ -n "$DEBUG" ] && printf \'\\n  HTTP %s %s\\n\' "$CODE" "$START"',
+      '  ID=$(printf \'%s\' "$START" | sed -n \'s/.*"searchId":"\\([^"]*\\)".*/\\1/p\')',
+      '  if [ -z "$ID" ]; then',
+      '    case "$CODE" in',
+      '      401) printf \' key rejected (401). Generate a new one in My preferences.\\n\' ;;',
+      '      403) printf \' no access to this tenant (403)\\n\' ;;',
+      '      429) printf \' still rate limited after waiting. Try again in a minute.\\n\' ;;',
+      '      000) printf \' no network reply. Check your connection or proxy.\\n\' ;;',
+      '      *)   printf \' could not start (HTTP %s)\\n\' "$CODE" ;;',
+      '    esac',
+      '    printf \'{"name":%s,"query":%s,"total":null,"data":[]}\' "\\"$NAME\\"" "\\"$(printf \'%s\' "$QUERY" | sed \'s/"/\\\\"/g\')\\"" > "$TMP/$N.json"',
+      '    return',
+      '  fi',
+      '  TOTAL=""; OUTJ=""',
+      '  for _ in $(seq 1 40); do',
+      '    sleep 2; printf \'.\'',
+      '    OUTJ=$(curl -s "$API/search/$ID?page=1&alias=true" -H "Authorization: Bearer $KEY")',
+      '    TOTAL=$(printf \'%s\' "$OUTJ" | sed -n \'s/.*"totalResults":\\([0-9]*\\).*/\\1/p\')',
+      '    [ -n "$TOTAL" ] && break',
+      '  done',
+      '  if [ -n "$TOTAL" ]; then printf \' %s\\n\' "$TOTAL"; else printf \' timed out\\n\'; fi',
+      '  # splice the reply into the report and let the browser parse it',
+      '  {',
+      '    printf \'{"name":"%s","query":"%s","total":%s,"reply":\' \\',
+      '      "$NAME" "$(printf \'%s\' "$QUERY" | sed \'s/"/\\\\"/g\')" "${TOTAL:-null}"',
+      '    # strip the password field before it ever reaches the report file',
+      '    printf \'%s\' "${OUTJ:-null}" | sed \'s#<\/#<\\\\/#g; s/"password":"[^"]*"/"password":"[removed]"/g\'',
+      '    printf \'}\'',
+      '  } > "$TMP/$N.json"',
+      '}',
+      '',
+      'echo ""',
+      'echo "Axur pre-meeting report: $BRAND ($DOMAIN)"',
+      'echo "-------------------------------------------"',
+      'run "Leaked credentials" credential  "emailDomain=\\"$DOMAIN\\""',
+      'run "In plaintext"       credential  "emailDomain=\\"$DOMAIN\\" AND passwordType=\\"PLAIN\\""',
+      'run "Phishing pages"     signal-lake "impersonatedBrandsHigh=\\"$BRAND\\""',
+      'run "Lookalike domains"  signal-lake "sanitizedDomainLabel=$LABEL~1"',
+      'run "Mail-enabled lookalikes" signal-lake "domainLabel=$LABEL~1 AND dnsRecordMX=*"',
+      'echo "-------------------------------------------"',
+      '',
+      '# ---------- cut the replies down to the rows the report shows ----------',
+      '# The API hands back a whole page and ignores every page-size parameter, so the',
+      '# rest would be emailed to the customer for nothing. Perl ships with macOS; if',
+      '# it is missing the full reply is kept, which only costs file size.',
+      'cat > "$TMP/trim.pl" <<\'PERL\'',
+      '#!/usr/bin/perl',
+      '# Keep the first N objects of the first "data":[ ... ] array; pass the rest of',
+      '# the file through byte for byte. String and escape aware, so a brace inside a',
+      '# value cannot fool the count. Scans in runs rather than character by character.',
+      'use strict; use warnings;',
+      'my ($limit, $file) = @ARGV;',
+      'open(my $fh, \'<:raw\', $file) or do { exit 1 };',
+      'local $/; my $s = <$fh>; close $fh;',
+      '',
+      'my $key = \'"data":[\';',
+      'my $start = index($s, $key);',
+      'if ($start < 0) { print $s; exit 0 }',
+      '',
+      'my $i = $start + length($key);',
+      'my $begin = $i;',
+      'my $n = length($s);',
+      'my ($depth, $kept) = (0, 0);',
+      '',
+      '# One pass. pos()/\\G lets the regex engine skip runs of uninteresting bytes,',
+      '# which is what makes this fast enough to run on a megabyte of replies.',
+      'sub scan_to_end {',
+      '    my ($from, $stop_after) = @_;',
+      '    my $d = 0;',
+      '    pos($s) = $from;',
+      '    while (pos($s) < $n) {',
+      '        last unless $s =~ /\\G[^"{}\\[\\]]*/gc;',
+      '        my $c = substr($s, pos($s), 1);',
+      '        last if $c eq \'\';',
+      '        if ($c eq \'"\') {                    # skip a whole string, escapes and all',
+      '            pos($s) = pos($s) + 1;',
+      '            $s =~ /\\G(?:[^"\\\\]|\\\\.)*/gcs;',
+      '            pos($s) = pos($s) + 1;',
+      '            next;',
+      '        }',
+      '        if ($c eq \'{\' or $c eq \'[\') { $d++; pos($s) = pos($s) + 1; next }',
+      '        if ($c eq \'}\') {',
+      '            $d--; pos($s) = pos($s) + 1;',
+      '            if ($d == 0 and $stop_after) { $kept++; return pos($s) if $kept >= $stop_after }',
+      '            next;',
+      '        }',
+      '        if ($c eq \']\') { return pos($s) if $d == 0; $d--; pos($s) = pos($s) + 1; next }',
+      '        pos($s) = pos($s) + 1;',
+      '    }',
+      '    return pos($s) // $n;',
+      '}',
+      '',
+      'my $end_of_kept = scan_to_end($i, $limit);',
+      'my $end_of_array = scan_to_end($end_of_kept, 0);',
+      '',
+      'print substr($s, 0, $begin), substr($s, $begin, $end_of_kept - $begin), substr($s, $end_of_array);',
+      'PERL',
+      '',
+      'if [ -x /usr/bin/perl ]; then',
+      '  printf \'Trimming rows      \'',
+      '  for f in "$TMP"/*.json; do',
+      '    if /usr/bin/perl "$TMP/trim.pl" "$ROWS" "$f" > "$f.t" 2>/dev/null && [ -s "$f.t" ]; then',
+      '      mv "$f.t" "$f"; printf \'.\'',
+      '    else',
+      '      rm -f "$f.t"; printf \'x\'',
+      '    fi',
+      '  done',
+      '  echo \' done\'',
+      'fi',
+      '',
+      '# ---------- build the report ----------',
+      'printf \'Writing the report \' >&2',
+      '{',
+      'cat <<HTMLHEAD',
+      '<!DOCTYPE html>',
+      '<html lang="en"><head><meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+      '<title>Threat scan: $BRAND<\/title>',
+      '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=optional" rel="stylesheet">',
+      '<style>',
+      ' :root{',
+      '   --ink:#171717;--body:#4d4d4d;--mute:#6a7078;--faint:#9aa1a8;--line:#e6e8ea;--soft:#fafafa;',
+      '   --dark:#23282d;--darker:#15181b;--tile:#1b1f23;--card:#e9ebec;',
+      '   --green:#12d15f;--teal:#39d3c3;--amber:#f5c518;--red:#ff5a52;',
+      ' }',
+      ' ::selection{background:#bff0e4;color:#0d1f1a}',
+      ' html{scrollbar-color:#c4c8cc #fff}',
+      ' ::-webkit-scrollbar{width:11px;height:11px}',
+      ' ::-webkit-scrollbar-track{background:var(--soft)}',
+      ' ::-webkit-scrollbar-thumb{background:#c4c8cc;border-radius:99px;border:3px solid var(--soft)}',
+      ' ::-webkit-scrollbar-thumb:hover{background:#a4a9ae}',
+      ' :focus-visible{outline:2px solid var(--teal);outline-offset:2px;border-radius:3px}',
+      ' a{text-underline-offset:3px}',
+      ' *{box-sizing:border-box}',
+      ' html,body{margin:0;padding:0}',
+      ' body{background:#fff;color:var(--ink);font-family:Inter,-apple-system,sans-serif;',
+      '      font-size:15px;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+      '',
+      ' /* ---------- page one: the executive summary ---------- */',
+      ' .cover{background:linear-gradient(150deg,#3a4046 0%,#23282d 42%,#15181b 100%);',
+      '        color:#fff;padding:44px 40px 48px}',
+      ' .cover .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:34px}',
+      ' .cover .top img.ib{height:34px;width:auto}',
+      ' .cover .top img.cust{height:46px;width:auto;max-width:170px;object-fit:contain;',
+      '        background:#fff;border-radius:8px;padding:6px}',
+      ' /* one logo source. When it fails the name is written out instead. */',
+      ' .cover .top .nm{display:none;font-size:21px;font-weight:600;letter-spacing:.4px}',
+      ' h1{font-size:33px;font-weight:600;letter-spacing:.5px;margin:0;text-transform:uppercase}',
+      ' .rule{height:3px;width:250px;margin:10px 0 20px;',
+      '       background:linear-gradient(90deg,var(--green),var(--teal))}',
+      ' .intro{max-width:74ch;font-size:14px;line-height:1.6;color:#d3d7db;margin:0 0 26px}',
+      '',
+      ' .chips{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;',
+      '        background:rgba(255,255,255,.05);border-radius:10px;padding:14px;margin-bottom:22px}',
+      ' .chip{background:var(--tile);border-radius:8px;padding:14px 12px;text-align:center}',
+      ' .chip b{display:block;color:var(--teal);font-size:15px;font-weight:600;word-break:break-word}',
+      ' .chip span{display:block;color:#d3d7db;font-size:13px;margin-top:3px}',
+      ' .key{margin:0 0 16px;font-size:14px;line-height:1.6;color:#d3d7db}',
+      ' .key .r,.key .a{font-size:15px;margin-right:2px}',
+      '',
+      ' .metric{display:flex;align-items:center;gap:18px;background:var(--card);color:var(--ink);',
+      '         border-radius:10px;padding:16px 18px;margin-bottom:14px}',
+      ' .metric .ico{flex:none;width:62px;height:62px;border-radius:50%;background:#fff;',
+      '              display:flex;align-items:center;justify-content:center}',
+      ' .metric .txt{flex:1;min-width:0}',
+      ' .metric h2{margin:0;font-size:16px;font-weight:700;letter-spacing:.3px;text-transform:uppercase}',
+      ' .metric p{margin:3px 0 0;font-size:14px;line-height:1.5;color:#414850;max-width:52ch}',
+      ' .metric .tiles{display:flex;gap:12px;flex:none}',
+      ' .tile{background:var(--tile);border-radius:8px;padding:12px 16px;text-align:center;min-width:104px;',
+      '       display:block;text-decoration:none;color:inherit}',
+      ' a.tile{transition:transform .12s ease-out,box-shadow .12s ease-out}',
+      ' a.tile:hover{transform:translateY(-2px);box-shadow:0 0 0 1.5px var(--teal)}',
+      ' a.tile:focus-visible{outline:2px solid var(--teal);outline-offset:3px}',
+      ' a.tile::after{content:"";display:block;height:2px;width:26px;margin:7px auto 0;border-radius:2px;',
+      '               background:var(--teal);opacity:.55}',
+      ' .tile b{display:block;font-size:27px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}',
+      ' .tile span{display:block;font-size:13px;color:#d3d7db;margin-top:3px}',
+      ' .g{color:var(--green)} .t{color:var(--teal)} .a{color:var(--amber)} .r{color:var(--red)}',
+      ' .tile small{display:block;font-size:12px;line-height:1.4;color:#aab1b8;margin-top:5px;',
+      '       max-width:112px}',
+      ' .metric .why{margin:6px 0 0;font-size:13px;line-height:1.5;color:#525a63;max-width:52ch}',
+      '',
+      ' /* one door into the evidence, then a numbered trail through it */',
+      ' .enter{display:flex;align-items:center;gap:16px;margin-top:20px;padding:15px 18px;',
+      '        border:1px dashed #4a5157;border-radius:10px;color:#fff;text-decoration:none}',
+      ' .enter .lab{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.14em;',
+      '             text-transform:uppercase;color:var(--teal)}',
+      ' .enter .say{flex:1;font-size:13.5px;font-weight:500}',
+      ' .enter .arr{font-size:18px;color:var(--teal)}',
+      '',
+      ' .step{display:flex;align-items:center;gap:10px;margin-bottom:8px}',
+      ' .step .n{font-family:"JetBrains Mono",monospace;font-size:20px;font-weight:600}',
+      ' .step .of{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--mute)}',
+      ' .step .bar{flex:1;height:2px;background:var(--line);border-radius:2px;overflow:hidden}',
+      ' .step .bar i{display:block;height:2px;background:linear-gradient(90deg,var(--green),var(--teal))}',
+      ' .means{font-size:14px;line-height:1.55;color:var(--body);margin:0 0 9px;max-width:70ch}',
+      ' .trail{display:flex;justify-content:space-between;align-items:baseline;',
+      '        margin-top:12px;padding-top:9px;border-top:1px solid var(--line)}',
+      ' .trail a{font-size:13px;text-decoration:none}',
+      ' .trail .up{color:var(--mute)}',
+      ' .trail .next{color:var(--ink);font-weight:600}',
+      ' .metric.aside{background:transparent;color:#d3d7db;border:1px solid #3d444b;padding:14px 18px}',
+      ' .metric.aside .ico{background:rgba(255,255,255,.06)}',
+      ' .metric.aside h2{color:#fff}',
+      ' .metric.aside p{color:#c2c8ce}',
+      ' .metric.aside .why{color:#98a0a8}',
+      ' .cover .foot{margin-top:22px;font-size:13px;color:#aab1b8}',
+      '',
+      ' /* ---------- the detail pages ---------- */',
+      ' .detail{padding:34px 40px 44px}',
+      ' .detail > h2{font-size:21px;font-weight:600;letter-spacing:-.4px;color:var(--ink);',
+      '              margin:0 0 6px}',
+      ' section{margin-bottom:30px}',
+      ' section h3{font-size:16px;font-weight:600;margin:0 0 2px;letter-spacing:-.2px}',
+      ' .q{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--body);',
+      '    margin:0 0 10px;word-break:break-all}',
+      ' table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}',
+      ' th{text-align:left;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.09em;',
+      '    text-transform:uppercase;color:var(--mute);font-weight:500;padding:7px 8px;',
+      '    border-bottom:1.5px solid var(--ink);background:var(--soft);height:34px;box-sizing:border-box}',
+      ' /* One line per row on screen, so the space reserved for a table is the space it takes.',
+      '    Print undoes this, because a customer reading the PDF needs the whole value. */',
+      ' td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle;',
+      '    height:34px;box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      ' td:hover{overflow:visible;white-space:normal;word-break:break-word;position:relative;',
+      '          background:#fffbe6;z-index:1}',
+      ' tbody tr:nth-child(even) td{background:var(--soft)}',
+      ' .more{font-size:12.5px;color:var(--mute);margin-top:7px}',
+      ' .warn{margin-top:26px;background:#fff5f5;border:1px solid #f7d4d6;border-radius:8px;',
+      '        padding:13px 16px;font-size:12.5px;line-height:1.5;color:var(--body);',
+      '        display:grid;grid-template-columns:24px 1fr;gap:12px;align-items:start}',
+      ' .warn svg{width:20px;height:20px;display:block;margin-top:1px}',
+      ' .warn b{color:#a80000;font-size:13.5px;font-weight:600;display:block;margin-bottom:2px;',
+      '         letter-spacing:-.2px}',
+      ' footer{margin-top:26px;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px;color:var(--mute)}',
+      '',
+      ' /* The hover lift carries no meaning, so it goes rather than shortens. */',
+      ' @media (prefers-reduced-motion:reduce){',
+      '   *,*::before,*::after{transition:none!important;animation:none!important}',
+      ' }',
+      '',
+      ' @media (max-width:760px){',
+      '   .cover{padding:28px 20px 34px}',
+      '   .chips{grid-template-columns:1fr}',
+      '   .metric{flex-direction:column;align-items:flex-start;gap:12px}',
+      '   .metric .tiles{width:100%;flex-wrap:wrap}',
+      '   .tile{flex:1 1 140px;min-width:0}',
+      '   .tile small{max-width:none}',
+      '   .detail{padding:24px 18px 30px}',
+      '   .cover .top img.cust{max-width:120px}',
+      ' }',
+      '',
+      ' @media print{',
+      '   a.tile::after{display:none}',
+      '   @page{size:A4;margin:0}',
+      '   .cover{min-height:297mm;page-break-after:always}',
+      '   .detail{padding:14mm}',
+      '   section{break-inside:auto}',
+      '   thead{display:table-header-group}',
+      '   tr{break-inside:avoid}',
+      '   /* the reservation is a screen device; on paper the rows set their own height */',
+      '   .rowbox{min-height:0!important}',
+      '   td{white-space:normal;word-break:break-word;height:auto;vertical-align:top}',
+      ' }',
+      '<\/style><\/head><body>',
+      '<main>',
+      '',
+      '<div class="cover" id="top">',
+      '  <div class="top">',
+      '    <div><img class="ib" src="$OURS" alt="Infoblox" referrerpolicy="origin"',
+      '         onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><span',
+      '         class="nm">Infoblox<\/span><\/div>',
+      '    <div><img class="cust" src="$LOGO" alt="$BRAND" referrerpolicy="origin"',
+      '         onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><span',
+      '         class="nm">$BRAND<\/span><\/div>',
+      '  <\/div>',
+      '',
+      '  <h1>Executive summary<\/h1>',
+      '  <div class="rule"><\/div>',
+      '  <p class="intro">Infoblox looked for exposure tied to your brand and your domain across breach',
+      '    data, dark web sources and the public web. Below is what was visible on',
+      '    $(date \'+%d %B %Y\'), and what each number means.<\/p>',
+      '',
+      '  <div class="chips">',
+      '    <div class="chip"><b>$BRAND<\/b><span>Brand name<\/span><\/div>',
+      '    <div class="chip"><b>$DOMAIN<\/b><span>Domain<\/span><\/div>',
+      '    <div class="chip"><b>$(date \'+%d %b %Y\')<\/b><span>Scan date<\/span><\/div>',
+      '  <\/div>',
+      '',
+      '  <p class="key"><span class="r">&#9679;<\/span> Red is what somebody could use today.',
+      '    <span class="a">&#9679;<\/span> Amber is exposure that needs a further step first.<\/p>',
+      '',
+      '  <div id="metrics"><\/div>',
+      '',
+      '  <a class="enter" href="#s1">',
+      '    <span class="lab">Evidence<\/span>',
+      '    <span class="say">Step through the records behind every number, in order<\/span>',
+      '    <span class="arr">&darr;<\/span>',
+      '  <\/a>',
+      '',
+      '  <p class="foot">Counts taken from one.axur.com. They move daily. Passwords are never included',
+      '    in this report.<\/p>',
+      '<\/div>',
+      '',
+      '<div class="detail">',
+      '  <h2>The records behind the numbers<\/h2>',
+      '  <p class="means">Each page below shows a sample of the records counted on the summary,',
+      '    with the exact search that found them. The count is the whole set; the table is a sample.<\/p>',
+      '  <div id="sections"><\/div>',
+      '  <div class="warn">',
+      '    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">',
+      '      <rect x="4" y="10.5" width="16" height="10" rx="2.4" stroke="#d40000" stroke-width="1.7"/>',
+      '      <path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9" stroke="#d40000" stroke-width="1.7"',
+      '            stroke-linecap="round"/>',
+      '    <\/svg>',
+      '    <div><b>Passwords withheld<\/b>',
+      '      Axur stores leaked passwords in clear text. This report shows the account and the site it',
+      '      was used on, never the password itself.<\/div>',
+      '  <\/div>',
+      '  <footer>Attack surface is a separate download: one.axur.com/easm, Exposures, Download all.<\/footer>',
+      '<\/div>',
+      'HTMLHEAD',
+      '',
+      '# A few hundred bytes of headline numbers, so the summary paints without',
+      '# waiting on the megabytes of replies below it.',
+      'echo \'<script type="application/json" id="totals">[\'',
+      'FIRST=1',
+      'for f in "$TMP"/*.json; do',
+      '  [ $FIRST -eq 1 ] || echo \',\'',
+      '  FIRST=0',
+      '  sed -n \'s/^{"name":"\\([^"]*\\)","query":"\\(.*\\)","total":\\([^,]*\\),.*/{"name":"\\1","query":"\\2","total":\\3}/p\' "$f"',
+      'done',
+      'echo \']<\/script>\'',
+      '',
+      '# The renderer runs BEFORE the megabytes below it, so the summary and the',
+      '# reserved section shells are on screen while the parser is still reading.',
+      'cat <<\'HTMLTAIL\' | sed "s/ROWSVALUE/$ROWS/"',
+      '<script>',
+      '(function(){',
+      '  var ROWLIMIT = ROWSVALUE;',
+      '  var HIDE = /password|hash|datahubId|^id$/i;   // never print a leaked password',
+      '  var PREF = [\'user\',\'accessUrl\',\'accessHost\',\'sourceName\',\'leakDisplayName\',',
+      '              \'domain\',\'url\',\'sourceUrl\',\'riskScore\',\'impersonatedBrandsHigh\',',
+      '              \'contentType\',\'domainCreationDate\',\'detectionDate\',\'sourceDate\'];',
+      '  // The summary reads a few hundred bytes of totals, so it paints at once.',
+      '  // The full replies are parsed later, in buildTables, because they run to megabytes.',
+      '  var totals = JSON.parse(document.getElementById(\'totals\').textContent);',
+      '  var tot = {};',
+      '  totals.forEach(function(t){ tot[t.name] = t.total; });',
+      '  var data = null, by = null;',
+      '  function loadPayload(){',
+      '    if (data) return data;',
+      '    var el = document.getElementById(\'payload\');',
+      '    if (!el) return [];',
+      '    data = JSON.parse(el.textContent);',
+      '    by = {};',
+      '    data.forEach(function(d){ by[d.name] = d; });',
+      '    return data;',
+      '  }',
+      '  function n(name){ var t = tot[name]; return (t === null || t === undefined) ? null : Number(t); }',
+      '  function show(v){ return v === null ? \'&mdash;\' : v.toLocaleString(); }',
+      '',
+      '  var ICON = {',
+      '    lock: \'<circle cx="17" cy="24" r="11" fill="none" stroke="#e05a52" stroke-width="2.4"/>\' +',
+      '          \'<rect x="10" y="17" width="24" height="15" rx="4" fill="#fff" stroke="#e05a52" stroke-width="2.4"/>\' +',
+      '          \'<circle cx="17" cy="24.5" r="1.8" fill="#e05a52"/><circle cx="22" cy="24.5" r="1.8" fill="#e05a52"/>\' +',
+      '          \'<circle cx="27" cy="24.5" r="1.8" fill="#e05a52"/>\',',
+      '    mask: \'<circle cx="22" cy="14" r="6" fill="#3a3f45"/>\' +',
+      '          \'<path d="M10 34c0-6.6 5.4-11 12-11s12 4.4 12 11" fill="#3a3f45"/>\',',
+      '    site: \'<rect x="7" y="11" width="30" height="22" rx="3" fill="none" stroke="#3a3f45" stroke-width="2.4"/>\' +',
+      '          \'<path d="M7 18h30" stroke="#3a3f45" stroke-width="2.4"/>\' +',
+      '          \'<path d="M22 22v6" stroke="#e05a52" stroke-width="2.6" stroke-linecap="round"/>\' +',
+      '          \'<circle cx="22" cy="31" r="1.4" fill="#e05a52"/>\',',
+      '    risk: \'<path d="M22 8 38 34H6z" fill="none" stroke="#e05a52" stroke-width="2.6" stroke-linejoin="round"/>\' +',
+      '          \'<path d="M18 20l8 8M26 20l-8 8" stroke="#e05a52" stroke-width="2.4" stroke-linecap="round"/>\'',
+      '  };',
+      '',
+      '  var ROWS = [',
+      '    { icon:\'lock\', title:\'Exposed credentials\', anchor:\'s1\',',
+      '      desc:\'Work accounts on this domain whose passwords have already been exposed somewhere outside your company.\',',
+      '      why:\'They come from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware.\',',
+      '      tiles:[ {v:n(\'Leaked credentials\'), l:\'Total\', c:\'a\', go:\'s1\',',
+      '               note:\'Every exposed account we can see.\'},',
+      '              {v:n(\'In plaintext\'),       l:\'In readable form\', c:\'r\', go:\'s2\',',
+      '               note:\'The password itself is readable, so anyone holding it can try to log in today.\'} ] },',
+      '    { icon:\'mask\', title:\'Impersonation sites\', anchor:\'s3\',',
+      '      desc:\'Web pages built to look like you, so a customer or an employee hands over a login or a card number.\',',
+      '      why:\'Only pages Axur is highly confident are impersonating this brand are counted. Pages that only mention the name are left out.\',',
+      '      tiles:[ {v:n(\'Phishing pages\'), l:\'Sites\', c:\'r\', go:\'s3\',',
+      '               note:\'Pages seen impersonating the brand.\'} ] },',
+      '    { icon:\'site\', title:\'Lookalike domains\', anchor:\'s4\',',
+      '      desc:\'Domain names one character away from yours, such as a swapped or doubled letter. They exist to be mistaken for you.\',',
+      '      why:\'A lookalike is only a nuisance until someone sets up email on it. At that point it can send a message that appears to come from your company.\',',
+      '      tiles:[ {v:n(\'Lookalike domains\'), l:\'Registered\', c:\'a\', go:\'s4\',',
+      '               note:\'Lookalike names somebody has bought.\'},',
+      '              {v:n(\'Mail-enabled lookalikes\'), l:\'Mail-enabled\', c:\'r\', go:\'s5\',',
+      '               note:\'Of those, the ones with email already switched on. These can send a convincing fake today.\'} ] },',
+      '    { icon:\'risk\', title:\'External attack surface\', anchor:null, aside:true,',
+      '      desc:\'The servers, services and open doors reachable from the public internet under your name.\',',
+      '      why:\'Not counted here. It comes from a different screen: one.axur.com/easm, Exposures, then Download all.\',',
+      '      tiles:[] }',
+      '  ];',
+      '',
+      '  var m = document.getElementById(\'metrics\');',
+      '  m.innerHTML = ROWS.map(function(r){',
+      '    return \'<div class="metric\' + (r.aside ? \' aside\' : \'\') + \'">\' +',
+      '      \'<div class="ico"><svg width="44" height="44" viewBox="0 0 44 44">\' + ICON[r.icon] + \'<\/svg><\/div>\' +',
+      '      \'<div class="txt"><h2>\' + r.title + \'<\/h2><p>\' + r.desc + \'<\/p>\' +',
+      '        \'<p class="why">\' + r.why + \'<\/p><\/div>\' +',
+      '      (r.tiles.length ? \'<div class="tiles">\' + r.tiles.map(function(t){',
+      '        // the note under each number, so nobody has to guess what the label means',
+      '        var tag = t.go ? \'a\' : \'div\', href = t.go ? \' href="#\' + t.go + \'"\' : \'\';',
+      '        return \'<\' + tag + \' class="tile"\' + href + \'><b class="\' + t.c + \'">\' + show(t.v) +',
+      '               \'<\/b><span>\' + t.l + \'<\/span><small>\' + t.note + \'<\/small><\/\' + tag + \'>\';',
+      '      }).join(\'\') + \'<\/div>\' : \'\') + \'<\/div>\';',
+      '  }).join(\'\');',
+      '',
+      '  // ---- the detail tables ----',
+      '  function rows(d){',
+      '    var r = d.reply && d.reply.result && d.reply.result.data;',
+      '    return Array.isArray(r) ? r : [];',
+      '  }',
+      '  function cols(rs){',
+      '    var seen = {};',
+      '    rs.slice(0, 20).forEach(function(r){ Object.keys(r).forEach(function(k){ seen[k] = 1; }); });',
+      '    var all = Object.keys(seen).filter(function(k){ return !HIDE.test(k); });',
+      '    var out = PREF.filter(function(k){ return all.indexOf(k) > -1; });',
+      '    all.forEach(function(k){ if (out.indexOf(k) < 0 && out.length < 5) out.push(k); });',
+      '    return out.slice(0, 5);',
+      '  }',
+      '  function label(k){',
+      '    return k.replace(/([a-z])([A-Z])/g, \'$1 $2\').replace(/^./, function(c){ return c.toUpperCase(); });',
+      '  }',
+      '  function fmt(v){',
+      '    if (v === null || v === undefined) return \'\';',
+      '    if (typeof v === \'number\' && v > 1000000000000) return new Date(v).toISOString().slice(0,10);',
+      '    if (typeof v === \'object\') return JSON.stringify(v).slice(0, 80);',
+      '    return String(v).slice(0, 120);',
+      '  }',
+      '',
+      '  // what each table is actually showing, in plain words',
+      '  var MEANS = {',
+      '    \'Leaked credentials\':',
+      '      \'One row per exposed account. The source column names where it turned up. An account can appear more than once if it leaked more than once.\',',
+      '    \'In plaintext\':',
+      '      \'The subset of the rows above where the password was stored in readable form. These are the ones to reset first. The password itself is withheld from this report.\',',
+      '    \'Phishing pages\':',
+      '      \'Pages Axur is highly confident are impersonating this brand. Some will already be offline; the date shows when each was seen.\',',
+      '    \'Lookalike domains\':',
+      '      \'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, but it is the first step in most of these attacks.\',',
+      '    \'Mail-enabled lookalikes\':',
+      '      \'The lookalike domains that already have working mail records. Somebody can send email from them that appears to come from your company, today, with no further setup.\'',
+      '  };',
+      '',
+      '  // the summary and the detail must call the same thing by the same name',
+      '  var TITLES = { \'Leaked credentials\':\'Exposed credentials\',',
+      '                 \'In plaintext\':\'Passwords in readable form\',',
+      '                 \'Phishing pages\':\'Impersonation sites\' };',
+      '  function heading(name){ return TITLES[name] || name; }',
+      '',
+      '  var secs = document.getElementById(\'sections\');',
+      '  var TOTAL = totals.length;',
+      '  var ROWH = 34;   // one row is one line: .rowbox td never wraps on screen',
+      '',
+      '  // ---- phase one, synchronous: the shell of every section, with its space reserved ----',
+      '  // Reserving the height here is what stops the page jumping when the rows land.',
+      '  totals.forEach(function(t, i){',
+      '    var s = document.createElement(\'section\');',
+      '    s.id = \'s\' + (i + 1);',
+      '',
+      '    var step = \'<div class="step"><span class="n">\' + (\'0\' + (i + 1)).slice(-2) + \'<\/span>\' +',
+      '               \'<span class="of">of \' + (\'0\' + TOTAL).slice(-2) + \'<\/span>\' +',
+      '               \'<span class="bar"><i style="width:\' +',
+      '                 Math.round((i + 1) / TOTAL * 100) + \'%"><\/i><\/span><\/div>\';',
+      '    var head = step + \'<h3>\' + heading(t.name) + \'<\/h3>\' +',
+      '               (MEANS[t.name] ? \'<p class="means">\' + MEANS[t.name] + \'<\/p>\' : \'\') +',
+      '               \'<p class="q">\' + t.query + \'<\/p>\';',
+      '',
+      '    // both directions live in the footer, so no floating button is needed and',
+      '    // nothing turns into dead chrome in the PDF',
+      '    var trail = \'<div class="trail"><a class="up" href="#top">&uarr; Back to the summary<\/a>\' +',
+      '      (i + 1 < TOTAL',
+      '        ? \'<a class="next" href="#s\' + (i + 2) + \'">\' + (\'0\' + (i + 2)).slice(-2) +',
+      '          \' &middot; \' + heading(totals[i + 1].name) + \' &rarr;<\/a>\'',
+      '        : \'<a class="next" href="#top">Back to the summary &uarr;<\/a>\') + \'<\/div>\';',
+      '',
+      '    var expect = t.total === null ? 0 : Math.min(ROWLIMIT, Number(t.total));',
+      '    var reserve = expect ? (expect + 1) * ROWH + 26 : 0;',
+      '',
+      '    s.innerHTML = head +',
+      '      \'<div class="rowbox" data-i="\' + i + \'"\' +',
+      '      (reserve ? \' style="min-height:\' + reserve + \'px"\' : \'\') + \'><\/div>\' + trail;',
+      '    secs.appendChild(s);',
+      '  });',
+      '',
+      '  // ---- phase two: the rows themselves, off the first-paint path ----',
+      '  // Idempotent, so the print path can call it without repeating the work.',
+      '  var built = false;',
+      '  function buildTables(){',
+      '    if (built) return;',
+      '    var d8 = loadPayload();',
+      '    if (!d8.length) return;   // parser has not reached the payload yet; try again later',
+      '    built = true;',
+      '    [].slice.call(secs.querySelectorAll(\'.rowbox\')).forEach(function(box){',
+      '      var d = d8[Number(box.getAttribute(\'data-i\'))];',
+      '      if (!d) return;',
+      '      var rs = rows(d).slice(0, ROWLIMIT);',
+      '      if (!rs.length) { box.innerHTML = \'<p class="more">No rows returned.<\/p>\'; return; }',
+      '      var cs = cols(rs);',
+      '      var html = \'<table><thead><tr>\' +',
+      '        cs.map(function(c){ return \'<th>\' + label(c) + \'<\/th>\'; }).join(\'\') + \'<\/tr><\/thead><tbody>\';',
+      '      rs.forEach(function(r){',
+      '        html += \'<tr>\' + cs.map(function(c){ return \'<td>\' + fmt(r[c]) + \'<\/td>\'; }).join(\'\') + \'<\/tr>\';',
+      '      });',
+      '      html += \'<\/tbody><\/table><p class="more">Showing \' + rs.length +',
+      '              \' of \' + (d.total === null ? \'?\' : Number(d.total).toLocaleString()) + \'.<\/p>\';',
+      '      box.innerHTML = html;',
+      '    });',
+      '    // The PDF step waits for this before printing.',
+      '    document.documentElement.setAttribute(\'data-report-ready\', \'1\');',
+      '  }',
+      '',
+      '  // This script sits above the payload, so the rows cannot be read until the',
+      '  // parser has finished the document.',
+      '  function kick(){ requestAnimationFrame(function(){ setTimeout(buildTables, 0); }); }',
+      '  // Screen: next frame, then a task, so the summary paints first. Not an idle',
+      '  // callback, which a headless or background tab can postpone indefinitely.',
+      '  if (document.readyState === \'loading\') {',
+      '    document.addEventListener(\'DOMContentLoaded\', kick);',
+      '  } else { kick(); }',
+      '  // Print and PDF: build synchronously, so nothing is captured half-empty.',
+      '  window.addEventListener(\'beforeprint\', buildTables);',
+      '})();',
+      '<\/script>',
+      'HTMLTAIL',
+      '',
+      'echo \'<script type="application/json" id="payload">[\'',
+      'FIRST=1',
+      'for f in "$TMP"/*.json; do',
+      '  [ $FIRST -eq 1 ] || echo \',\'',
+      '  FIRST=0',
+      '  cat "$f"',
+      'done',
+      'echo \']<\/script>\'',
+      '',
+      'echo \'<\/main><\/body><\/html>\'',
+      '} > "$OUT"',
+      '',
+      '',
+      'echo \' done\' >&2',
+      '',
+      '# full path, so nobody has to guess which folder they were standing in',
+      'ABS="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"',
+      'echo "Wrote $ABS"',
+      '',
+      '# Chrome or Edge can print the report without opening a window',
+      'CHROME=""',
+      'for C in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\',
+      '         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \\',
+      '         "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \\',
+      '         "$(command -v google-chrome 2>/dev/null)" \\',
+      '         "$(command -v chromium 2>/dev/null)"; do',
+      '  [ -n "$C" ] && [ -x "$C" ] && CHROME="$C" && break',
+      'done',
+      '',
+      'DONE=""',
+      'if [ "$NOPDF" = "1" ]; then',
+      '  DONE="$ABS"',
+      'elif [ -n "$CHROME" ]; then',
+      '  PDF="${ABS%.html}.pdf"',
+      '  printf \'Making the PDF\'',
+      '  "$CHROME" --headless --disable-gpu --no-pdf-header-footer \\',
+      '            --virtual-time-budget=15000 --print-to-pdf="$PDF" \\',
+      '            "file://$ABS" >/dev/null 2>&1',
+      '  if [ -s "$PDF" ]; then',
+      '    echo " ... wrote $PDF"',
+      '    DONE="$PDF"',
+      '  else',
+      '    echo " ... failed. Open the HTML and press Cmd+P."',
+      '    DONE="$ABS"',
+      '  fi',
+      'else',
+      '  echo "No Chrome or Edge found, so no PDF. Open the HTML and press Cmd+P."',
+      '  DONE="$ABS"',
+      'fi',
+      '',
+      '# open it, so the run ends with the report on screen rather than a path to hunt for',
+      'if [ "$NOOPEN" = "1" ]; then',
+      '  echo "Open it with:  open \\"$DONE\\""',
+      'elif command -v open >/dev/null 2>&1; then',
+      '  open "$DONE"',
+      'else',
+      '  echo "Open it with:  open \\"$DONE\\""',
+      'fi',
+      'echo ""',
+    ].join('\n');
+    var ps = [
+      'param([Parameter(Mandatory=$true)][string]$ApiKey, [switch]$ShowRaw)',
+      '# Axur pre-meeting report.',
+      '#   powershell -ExecutionPolicy Bypass -File axur-report.ps1 YOUR_API_KEY',
+      '#   leave the key off and it will ask for it',
+      '#   add -ShowRaw to see the replies',
+      '$brand  = "' + v.BRAND + '"',
+      '$domain = "' + v.DOMAIN + '"',
+      '$label  = "' + v.LABEL + '"',
+      '$api = "https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"',
+      '$headers = @{ Authorization = "Bearer $ApiKey" }',
+      '',
+      'function Invoke-Search($name, $source, $query) {',
+      '  Write-Host ("{0,-22}" -f $name) -NoNewline',
+      '  $body = @{ query = $query; source = $source } | ConvertTo-Json -Compress',
+      '  $start = $null; $attempt = 0',
+      '  while ($true) {',
+      '    try {',
+      '      $start = Invoke-RestMethod -Method Post -Uri "$api/search" -Headers $headers -ContentType "application/json" -Body $body',
+      '      if ($ShowRaw) { Write-Host ""; Write-Host "  start reply: $($start | ConvertTo-Json -Compress)" }',
+      '      break',
+      '    } catch {',
+      '      $c = $null',
+      '      if ($_.Exception.Response) { $c = [int]$_.Exception.Response.StatusCode }',
+      '      # the gateway allows 30 calls a window, so wait it out rather than failing',
+      '      if ($c -eq 429 -and $attempt -lt 3) { $attempt++; Write-Host "w" -NoNewline; Start-Sleep -Seconds 25; continue }',
+      '    $code = $null',
+      '    if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }',
+      '      switch ($c) {',
+      '        401 { Write-Host " key rejected (401). Generate a new one in My preferences." }',
+      '        403 { Write-Host " no access to this tenant (403)" }',
+      '        429 { Write-Host " still rate limited after waiting. Try again in a minute." }',
+      '        default { Write-Host " could not start (HTTP $c) $($_.Exception.Message)" }',
+      '      }',
+      '      return',
+      '    }',
+      '  }',
+      '  $id = $start.searchId',
+      '  $total = $null',
+      '  for ($i = 0; $i -lt 40; $i++) {',
+      '    Start-Sleep -Seconds 2',
+      '    Write-Host "." -NoNewline',
+      '    try { $r = Invoke-RestMethod -Uri "$api/search/${id}?page=1" -Headers $headers } catch { continue }',
+      '    if ($ShowRaw) { Write-Host ""; Write-Host "  poll reply: $($r.result.status | ConvertTo-Json -Compress)" }',
+      '    $total = $r.result.status.totalResults',
+      '    if ($null -ne $total) { break }',
+      '  }',
+      '  if ($null -eq $total) { Write-Host " timed out" } else { Write-Host " $total" }',
+      '}',
+      '',
+      'Write-Host ""',
+      'Write-Host "Axur pre-meeting report: $brand"',
+      'Write-Host "-------------------------------------------"',
+      'Invoke-Search "Leaked credentials" "credential"  "emailDomain=`"$domain`""',
+      'Invoke-Search "In plaintext"       "credential"  "emailDomain=`"$domain`" AND passwordType=`"PLAIN`""',
+      'Invoke-Search "Phishing pages"     "signal-lake" "impersonatedBrandsHigh=`"$brand`""',
+      'Invoke-Search "Lookalike domains"  "signal-lake" "sanitizedDomainLabel=$label~1"',
+      'Invoke-Search "Can send mail"      "signal-lake" "domainLabel=$label~1 AND dnsRecordMX=*"',
+      'Write-Host "-------------------------------------------"',
+      'Write-Host "Attack surface: one.axur.com/easm, Exposures, Download all"',
+      'Write-Host ""'
+    ].join('\r\n');
+    return { mac: sh, win: ps };
+  }
+})();
+</script>
+</body></html>
