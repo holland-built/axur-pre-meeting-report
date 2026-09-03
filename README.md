@@ -100,7 +100,8 @@ A summary page, the records behind each number, and a PDF. It opens when it is
 done. Passwords are never written to the file.
 
 Read the Impersonated brand column before you send it: that search matches any
-brand containing the word, so Delta returns Delta Cafés.
+brand whose name contains the word, so a one-word brand picks up
+unrelated companies that share it.
 
 ## Files
 
