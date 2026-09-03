@@ -171,9 +171,13 @@ elif [ -n "$LOGO_DATA" ]; then echo " ... got $BRAND"
 elif [ -n "$LOGOSRC" ]; then echo " ... could not read $LOGOSRC, the name will be written instead"
 else echo " ... none for $DOMAIN, the name will be written instead"; fi
 
-run() { # run NAME SOURCE QUERY
+# Axur runs a search on its own side once it is started, so the five overlap if
+# they are all started first. Waiting for them one at a time cost the sum of
+# five waits; starting them together costs about the longest one.
+start_search() { # start_search NAME SOURCE QUERY
   NAME="$1"; SOURCE="$2"; QUERY="$3"; N=$((N+1))
-  printf '%-26s' "$NAME"
+  printf '%s' "$NAME"  > "$TMP/$N.name"
+  printf '%s' "$QUERY" > "$TMP/$N.query"
   ESC=$(printf '%s' "$QUERY" | sed 's/\\/\\\\/g; s/"/\\"/g')
   BODY=$(printf '{"query":"%s","source":"%s"}' "$ESC" "$SOURCE")
   ATTEMPT=0
@@ -187,7 +191,7 @@ run() { # run NAME SOURCE QUERY
     fi
     break
   done
-  [ -n "$DEBUG" ] && printf '\n  HTTP %s %s\n' "$CODE" "$START"
+  [ -n "$DEBUG" ] && printf '  HTTP %s %s\n' "$CODE" "$START"
   ID=$(printf '%s' "$START" | sed -n 's/.*"searchId":"\([^"]*\)".*/\1/p')
   if [ -z "$ID" ]; then
     case "$CODE" in
@@ -197,9 +201,20 @@ run() { # run NAME SOURCE QUERY
       000) printf ' no network reply. Check your connection or proxy.\n' ;;
       *)   printf ' could not start (HTTP %s)\n' "$CODE" ;;
     esac
+    printf '%-26s' "$NAME"
     printf '{"name":%s,"query":%s,"total":null,"data":[]}' "\"$NAME\"" "\"$(printf '%s' "$QUERY" | sed 's/"/\\"/g')\"" > "$TMP/$N.json"
+    : > "$TMP/$N.failed"
     return
   fi
+  printf '%s' "$ID" > "$TMP/$N.id"
+  printf '  started %s\n' "$NAME"
+}
+
+collect_search() { # collect_search N
+  N="$1"
+  [ -f "$TMP/$N.failed" ] && return
+  NAME=$(cat "$TMP/$N.name"); QUERY=$(cat "$TMP/$N.query"); ID=$(cat "$TMP/$N.id")
+  printf '%-26s' "$NAME"
   # Axur answers with a total long before it has finished searching: the reply
   # carries "running":true and a totalResults that is still climbing. Taking the
   # first number that appears reports a fraction of the real count as if it were
@@ -263,16 +278,21 @@ run() { # run NAME SOURCE QUERY
 echo ""
 echo "Axur pre-meeting report: $BRAND ($DOMAIN)"
 echo "-------------------------------------------"
-run "Leaked credentials" credential  "emailDomain=\"$DOMAIN\""
-run "In plaintext"       credential  "emailDomain=\"$DOMAIN\" AND passwordType=\"PLAIN\""
-run "Phishing pages"     signal-lake "impersonatedBrandsHigh=\"$BRAND\""
+start_search "Leaked credentials" credential  "emailDomain=\"$DOMAIN\""
+start_search "In plaintext"       credential  "emailDomain=\"$DOMAIN\" AND passwordType=\"PLAIN\""
+start_search "Phishing pages"     signal-lake "impersonatedBrandsHigh=\"$BRAND\""
 # The report draws the mail-enabled count as part of the lookalike count, so the
 # two searches must start from the same set. They did not: the parent used the
 # cleaned label and the subset used the plain one, which matches far more, and
 # equifax.com came back with 385 mail-enabled out of 78 registered. The subset
 # is now the parent query with the mail filter added, and nothing else.
-run "Lookalike domains"  signal-lake "sanitizedDomainLabel=$LABEL~1"
-run "Mail-enabled lookalikes" signal-lake "sanitizedDomainLabel=$LABEL~1 AND dnsRecordMX=*"
+start_search "Lookalike domains"  signal-lake "sanitizedDomainLabel=$LABEL~1"
+start_search "Mail-enabled lookalikes" signal-lake "sanitizedDomainLabel=$LABEL~1 AND dnsRecordMX=*"
+
+# now wait: they have all been running on Axur's side since they were started
+COUNT=$N
+K=1
+while [ "$K" -le "$COUNT" ]; do collect_search "$K"; K=$((K+1)); done
 echo "-------------------------------------------"
 
 # The two ways a count can be short both used to pass without a word. Say them

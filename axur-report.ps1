@@ -7,6 +7,7 @@
   Anything you leave off, it asks for.
 
     -Rows N         rows listed under each count (default 50)
+    -Wait SECONDS   how long to let each search finish (default 300)
     -MinScore N     drop rows scoring below N (lookalike and phishing only)
     -Exclude LIST   drop rows matching these, comma separated. ".au,known.com"
     -ExcludeFile F  same, read from a file or CSV. One per line, first column,
@@ -24,7 +25,7 @@
 #>
 param(
   [string]$Brand, [string]$Domain, [string]$ApiKey,
-  [int]$Rows = 50, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
+  [int]$Rows = 50, [int]$Wait = 300, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
   [string]$Logo, [switch]$NoLogo, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
 
@@ -110,7 +111,7 @@ if ($ExcludeFile) {
   Write-Host "Excluding $($patterns.Count) patterns from $ExcludeFile"
 }
 $anyFilter = ($MinScore -or $patterns.Count)
-$partial = @()
+$partial = @(); $incomplete = @()
 
 # Keep a row unless the score is below the floor or a pattern matches its
 # domain or url. A credential has neither, so only the three domain searches
@@ -133,8 +134,10 @@ function Test-Keep($row) {
   return $true
 }
 
-function Invoke-Search($name, $source, $query) {
-  Write-Host -NoNewline ("{0,-26}" -f $name)
+# Axur runs a search on its own side once started, so the five overlap if they
+# are all started first. Waiting for them one at a time cost the sum of five
+# waits; starting them together costs about the longest one.
+function Start-Search($name, $source, $query) {
   $body = @{ query = $query; source = $source } | ConvertTo-Json -Compress
   $start = $null; $attempt = 0
   while ($true) {
@@ -147,26 +150,45 @@ function Invoke-Search($name, $source, $query) {
       if ($_.Exception.Response) { $c = [int]$_.Exception.Response.StatusCode }
       # the gateway allows 30 calls a window, so wait it out rather than failing
       if ($c -eq 429 -and $attempt -lt 3) { $attempt++; Write-Host -NoNewline "w"; Start-Sleep -Seconds 25; continue }
+      Write-Host -NoNewline ("{0,-26}" -f $name)
       switch ($c) {
         401 { Write-Host " key rejected (401). Generate a new one in My preferences." }
         403 { Write-Host " no access to this tenant (403)" }
         429 { Write-Host " still rate limited after waiting. Try again in a minute." }
         default { Write-Host " could not start (HTTP $c)" }
       }
-      return [pscustomobject]@{ name = $name; query = $query; total = $null; raw = '{"result":{"data":[]}}' }
+      return [pscustomobject]@{ name = $name; query = $query; id = $null }
     }
   }
-  $id = $start.searchId
-  $total = $null; $raw = $null
-  for ($i = 0; $i -lt 40; $i++) {
+  Write-Host "  started $name"
+  return [pscustomobject]@{ name = $name; query = $query; id = $start.searchId }
+}
+
+function Complete-Search($job) {
+  $name = $job.name; $query = $job.query; $id = $job.id
+  if (-not $id) {
+    return [pscustomobject]@{ name = $name; query = $query; total = $null; raw = '{"result":{"data":[]}}' }
+  }
+  Write-Host -NoNewline ("{0,-26}" -f $name)
+  # Axur answers with a total long before it has finished searching: the reply
+  # carries running=true and a totalResults still climbing. Taking the first
+  # number reports a fraction as if it were the whole.
+  $total = $null; $raw = $null; $running = $true
+  for ($i = 0; $i -lt [int]($Wait / 2); $i++) {
     Start-Sleep -Seconds 2; Write-Host -NoNewline "."
     try { $r = Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
     $raw = $r.Content
     $o = $raw | ConvertFrom-Json
     $total = $o.result.status.totalResults
-    if ($null -ne $total) { break }
+    $running = [bool]$o.result.status.running
+    if (-not $running -and $null -ne $total) { break }
   }
-  if ($null -eq $total) { Write-Host " timed out" } else { Write-Host -NoNewline " $total" }
+  if ($null -eq $total) { Write-Host " timed out" }
+  elseif ($running) {
+    Write-Host -NoNewline " at least $total (still searching after ${Wait}s)"
+    $script:incomplete += $name
+  }
+  else { Write-Host -NoNewline " $total" }
   if ($ShowRaw) { Write-Host ""; Write-Host "  $raw" }
 
   $doc = if ($raw) { $raw | ConvertFrom-Json } else { $null }
@@ -219,13 +241,16 @@ function Invoke-Search($name, $source, $query) {
 Write-Host ""
 Write-Host "Axur pre-meeting report: $Brand"
 Write-Host "-------------------------------------------"
-$results = @(
-  (Invoke-Search "Leaked credentials"         "credential"  "emailDomain=`"$Domain`""),
-  (Invoke-Search "In plaintext"               "credential"  "emailDomain=`"$Domain`" AND passwordType=`"PLAIN`""),
-  (Invoke-Search "Phishing pages"             "signal-lake" "impersonatedBrandsHigh=`"$Brand`""),
-  (Invoke-Search "Lookalike domains"          "signal-lake" "sanitizedDomainLabel=$label~1"),
-  (Invoke-Search "Mail-enabled lookalikes"    "signal-lake" "sanitizedDomainLabel=$label~1 AND dnsRecordMX=*")
+$jobs = @(
+  (Start-Search "Leaked credentials"         "credential"  "emailDomain=`"$Domain`""),
+  (Start-Search "In plaintext"               "credential"  "emailDomain=`"$Domain`" AND passwordType=`"PLAIN`""),
+  (Start-Search "Phishing pages"             "signal-lake" "impersonatedBrandsHigh=`"$Brand`""),
+  (Start-Search "Lookalike domains"          "signal-lake" "sanitizedDomainLabel=$label~1"),
+  (Start-Search "Mail-enabled lookalikes"    "signal-lake" "sanitizedDomainLabel=$label~1 AND dnsRecordMX=*")
 )
+
+# now wait: they have all been running on Axur's side since they started
+$results = @($jobs | ForEach-Object { Complete-Search $_ })
 Write-Host "-------------------------------------------"
 
 $head = @'
@@ -877,6 +902,10 @@ $doc = $head + "`n" +
 $abs = (Resolve-Path $Out).Path
 Write-Host "done"
 Write-Host "Wrote $abs"
+if ($incomplete.Count) {
+  Write-Host "Note: these had not finished when the wait ran out, so their counts are a"
+  Write-Host "floor, not a total. Re-run with a longer -Wait: $($incomplete -join ', ')"
+}
 if ($partial.Count) {
   Write-Host "Note: hit the page cap on $($partial -join ', '). Those counts came from a partial pull."
 }
