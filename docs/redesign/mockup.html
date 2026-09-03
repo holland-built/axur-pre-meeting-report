@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threat exposure: Larkspur Financial</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+ /* ---------- Infoblox palette ---------- */
+ :root{
+   --black:#101820; --green:#00BD4D; --cyan:#00E2EC; --offwhite:#F0EFE9; --steel:#D9E1E2; --yellow:#FEDD00;
+   /* severity on the dark cover (as in the current report) */
+   --red-d:#ff5a52; --amber-d:#f5c518;
+   /* severity on white paper: the same hues, darkened until they pass 4.5:1 as text */
+   --red:#c9362d; --amber:#8a6300;
+   --ink:#101820; --body:#3d454c; --mute:#6a7078; --faint:#9aa1a8;
+   --line:#e3e6e8; --zebra:#f6f6f3; --paper:#fff;
+   --sans:Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;
+   --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+ }
+ *{box-sizing:border-box}
+ html,body{margin:0;padding:0}
+ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;
+      -webkit-print-color-adjust:exact;print-color-adjust:exact;
+      font-feature-settings:"cv11","ss01"}
+ a{color:inherit;text-underline-offset:3px}
+ :focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:3px}
+ .wrap{max-width:1180px;margin:0 auto;padding:0 40px}
+
+ /* =================== page one: the cover =================== */
+ .cover{background:var(--black);color:#fff;padding:40px 0 44px;
+        background-image:radial-gradient(1100px 520px at 88% -10%,rgba(0,226,236,.14),transparent 62%)}
+ .cover .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px}
+ .cover .top img.ib{height:32px;width:auto;display:block}
+ .cover .top .cust{height:46px;max-width:190px;background:#fff;border-radius:6px;padding:8px 14px;
+        display:flex;align-items:center}
+ .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--cyan);margin:0 0 8px}
+ h1{font-size:34px;font-weight:600;letter-spacing:-.4px;line-height:1.15;margin:0}
+ .rule{height:3px;width:220px;margin:14px 0 18px;background:linear-gradient(90deg,var(--green),var(--cyan))}
+ .intro{max-width:70ch;font-size:15px;line-height:1.6;color:#c9cfd3;margin:0 0 22px}
+
+ .facts{display:flex;gap:0;border:1px solid #2c3640;border-radius:8px;margin-bottom:12px;overflow:hidden}
+ .fact{flex:1 1 auto;padding:12px 18px;border-right:1px solid #2c3640;min-width:0}
+ .fact:last-child{border-right:0}
+ .fact span{display:block;font-size:12px;color:#98a1a8;letter-spacing:.02em}
+ .fact b{display:block;font-family:var(--mono);font-size:15px;font-weight:500;color:var(--cyan);margin-top:2px;
+         overflow-wrap:anywhere}
+ .key{margin:0 0 18px;font-size:13.5px;color:#aab1b8;display:flex;gap:22px;flex-wrap:wrap}
+ .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:1px;margin-right:6px}
+ .dot.r{background:var(--red-d)} .dot.a{background:var(--amber-d)}
+
+ /* --- summary cards: figure on the left, story on the right, one rule between --- */
+ .card{display:grid;grid-template-columns:250px 1fr;column-gap:32px;
+       background:var(--offwhite);color:var(--ink);border-radius:10px;padding:22px 26px 22px 26px;margin-bottom:12px;
+       text-decoration:none}
+ .fig{border-right:1px solid #c5cbcd;padding-right:28px;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
+ .big{font-size:44px;font-weight:600;line-height:1;letter-spacing:-1px;color:var(--ink)}
+ .big.sev-r{color:var(--red)} .big.sev-a{color:var(--amber)}
+ .lab{font-size:13.5px;color:var(--body);margin-top:6px;line-height:1.35}
+ .meter{height:6px;background:#cfd6d7;border-radius:3px;margin:14px 0 10px;overflow:hidden}
+ .meter i{display:block;height:100%;background:var(--red);border-radius:3px}
+ .sub{font-size:14px;line-height:1.35;color:var(--body)}
+ .sub b{font-size:22px;font-weight:600;letter-spacing:-.4px;color:var(--red);display:block;margin-bottom:2px}
+ .txt{min-width:0;display:flex;flex-direction:column;justify-content:center}
+ .txt h2{margin:0 0 6px;font-size:16px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;display:flex;align-items:center;gap:9px}
+ .txt h2 svg{width:22px;height:22px;flex:none}
+ .txt p{margin:0;font-size:14.5px;line-height:1.5;color:var(--body);max-width:66ch}
+ .txt p+p{margin-top:5px;color:#525a63;font-size:13.5px}
+ .txt .go{margin-top:9px;font-size:13px;color:var(--ink);font-weight:600;text-decoration:none;display:inline-flex;gap:7px;align-items:center}
+ .txt .go .n{font-family:var(--mono);font-weight:500;font-size:11.5px;color:var(--mute);letter-spacing:.08em}
+
+ .card.aside{background:transparent;border:1px solid #33404b;color:#d3d7db;grid-template-columns:1fr;padding:18px 26px}
+ .card.aside .txt h2{color:#fff}
+ .card.aside .txt p{color:#b6bec5}
+ .card.aside .txt p+p{color:#8f989f}
+
+ .toc{margin-top:22px;border-top:1px solid #2c3640;padding-top:14px;display:grid;grid-template-columns:auto 1fr;gap:6px 22px;align-items:baseline}
+ .toc .h{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);grid-column:1/-1;margin-bottom:2px}
+ .toc a{color:#e8ebee;text-decoration:none;font-size:13.5px}
+ .toc .n{font-family:var(--mono);font-size:12px;color:#8f989f}
+ .toc a>.n:first-child{display:none}   /* the number sits in its own grid column on screen, inline on paper */
+ .cover .foot{margin-top:22px;font-size:13px;color:#8f989f}
+
+ /* =================== the detail sections =================== */
+ .section{padding:0 0 44px}
+ .strip{position:sticky;top:0;z-index:3;background:var(--paper);border-bottom:1px solid var(--steel);
+        display:flex;align-items:center;gap:14px;height:44px;font-size:12.5px}
+ .strip .n{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--mute)}
+ .strip .n b{color:var(--ink);font-weight:600}
+ .strip .name{font-weight:600;color:var(--ink)}
+ .strip .cust{color:var(--mute)}
+ .strip .up{margin-left:auto;text-decoration:none;color:var(--ink);font-weight:500;
+            border:1px solid var(--steel);border-radius:99px;padding:4px 12px;background:var(--paper)}
+ .strip .up:hover{border-color:var(--ink)}
+ .bar{height:3px;background:var(--line);margin-bottom:26px}
+ .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--cyan))}
+ .section h2{font-size:24px;font-weight:600;letter-spacing:-.4px;margin:0 0 6px;display:flex;align-items:baseline;gap:14px}
+ .section h2 .num{font-family:var(--mono);font-size:14px;font-weight:500;color:var(--mute);letter-spacing:.06em}
+ .section h2 .cnt{margin-left:auto;font-size:14px;font-weight:500;color:var(--body)}
+ .section h2 .cnt b{font-weight:600;color:var(--ink)}
+ .means{font-size:14.5px;line-height:1.55;color:var(--body);margin:0 0 14px;max-width:78ch}
+ .query{display:flex;align-items:baseline;gap:12px;background:var(--offwhite);border-radius:6px;padding:9px 14px;margin:0 0 18px;
+        font-family:var(--mono);font-size:12.5px;color:var(--body);overflow-wrap:anywhere}
+ .query span{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);flex:none}
+
+ /* --- the table --- */
+ table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed}
+ col{width:var(--w)}                    /* screen share; paper may use its own, see @media print */
+ th{position:sticky;top:44px;z-index:2;background:var(--paper);text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--mute);font-weight:500;padding:8px 10px 7px;border-bottom:2px solid var(--ink);
+    vertical-align:bottom;line-height:1.3}
+ td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.4;overflow-wrap:anywhere}
+ tbody tr:nth-child(even) td{background:var(--zebra)}
+ th.num,td.num{text-align:right}
+ td.idx{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right;padding-left:4px;padding-right:6px;padding-top:10px;white-space:nowrap}
+ th.idx{padding-left:4px;padding-right:6px}
+ .id{font-family:var(--mono);font-size:12.5px;color:var(--ink)}           /* identifiers: accounts, domains, urls */
+ .id .p{color:var(--mute)}                                                  /* the path part of a url, quieter */
+ .sec{display:block;font-size:12px;color:var(--mute);margin-top:2px}        /* a second line under a value */
+ .date{font-family:var(--mono);font-size:12.5px;white-space:nowrap;color:var(--body);font-variant-numeric:tabular-nums}
+ .date .ago{display:block;font-family:var(--sans);font-size:11.5px;color:var(--faint);white-space:normal}
+ .none{color:var(--faint)}
+ .flag{display:inline-flex;align-items:flex-start;gap:6px}
+ .flag::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none;margin-top:5px}
+ .flag.r::before{background:var(--red)} .flag.a::before{background:var(--amber)} .flag.g::before{background:var(--green)}
+ .flag.r{color:var(--red);font-weight:500}
+ /* risk: the number and a short meter, so 4.7 and 92.1 differ in shape as well as digits */
+ .risk{display:flex;align-items:center;gap:8px;white-space:nowrap}
+ .risk b{font-family:var(--mono);font-weight:500;font-size:12.5px;width:4ch;text-align:right;font-variant-numeric:tabular-nums;color:var(--mute)}
+ .risk i{display:block;width:56px;height:6px;background:var(--steel);border-radius:3px;overflow:hidden;flex:none}
+ .risk i::after{content:"";display:block;height:100%;width:var(--w);background:var(--faint);border-radius:3px}
+ .risk.a b{color:var(--amber);font-weight:600} .risk.a i::after{background:#e0a800}
+ .risk.r b{color:var(--red);font-weight:600} .risk.r i::after{background:var(--red)}
+ .brands{line-height:1.4}
+ .brands .you{font-weight:600}
+ .more{font-size:12.5px;color:var(--mute);margin-top:9px}
+ .trail{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding-top:10px;border-top:1px solid var(--line);font-size:13px}
+ .trail a{text-decoration:none}
+ .trail .up{color:var(--mute)} .trail .next{color:var(--ink);font-weight:600}
+
+ .note{margin:0 0 44px;background:#fff5f4;border:1px solid #f3cfcc;border-radius:8px;padding:13px 16px;font-size:13px;line-height:1.5;color:var(--body)}
+ .note b{color:var(--red);display:block;font-size:13.5px;margin-bottom:2px}
+ footer{padding:0 0 40px;font-size:12.5px;color:var(--mute)}
+
+ /* screen only: A4 is 794px wide, so an unscoped breakpoint would fire on paper too */
+ @media screen and (max-width:820px){
+   .wrap{padding:0 20px}
+   .card{grid-template-columns:1fr;row-gap:14px}
+   .fig{border-right:0;border-bottom:1px solid #c5cbcd;padding:0 0 14px}
+   .facts{flex-direction:column} .fact{border-right:0;border-bottom:1px solid #2c3640}
+   table{table-layout:auto}
+ }
+
+ /* =================== paper =================== */
+ @media print{
+   @page{size:A4;margin:15mm 13mm 16mm}
+   @page cover{margin:0}
+   .cover{page:cover;min-height:297mm;padding:10mm 0 8mm;break-after:page}
+   .cover .wrap{padding:0 13mm}
+   .cover .top{margin-bottom:14px}
+   .cover .top img.ib{height:26px} .cover .top .cust{height:38px;padding:6px 12px}
+   .wrap{padding:0;max-width:none}
+   body{font-size:12.5px}
+   .kicker{font-size:10.5px;margin-bottom:5px}
+   h1{font-size:25px} .rule{margin:9px 0 11px}
+   .intro{font-size:11.5px;margin-bottom:12px;line-height:1.5}
+   .fact{padding:7px 14px} .fact span{font-size:10px} .fact b{font-size:12px}
+   .key{font-size:11px;margin-bottom:10px}
+   .card{padding:11px 16px;margin-bottom:7px;grid-template-columns:180px 1fr;column-gap:20px;break-inside:avoid;border-radius:8px}
+   .fig{padding-right:18px}
+   .big{font-size:30px} .sub b{font-size:16px} .lab,.sub{font-size:11px} .meter{margin:8px 0 5px}
+   .txt p{font-size:11.5px} .txt p+p{font-size:11px;margin-top:3px} .txt h2{font-size:12.5px;margin-bottom:4px}
+   .txt .go{font-size:11px;margin-top:4px} .txt .go .n{font-size:10px}
+   .card.aside{padding:9px 16px}
+   /* the section list runs in one line on paper */
+   .toc{display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:10px;padding-top:9px;align-items:baseline}
+   .toc .h{width:100%;font-size:10.5px;margin-bottom:0}
+   .toc a{font-size:11px} .toc>.n{display:none} .toc a>.n:first-child{display:inline}
+   .cover .foot{font-size:10.5px;margin-top:8px}
+   .flag{overflow-wrap:normal}
+   col{width:var(--wp,var(--w))}
+   .fact{flex:1 1 auto}
+   .section{break-before:page;padding-bottom:0}
+   .strip{position:static;height:auto;padding:0 0 8px}
+   .strip .up{display:none}
+   th{position:static;font-size:9.5px;padding:6px 7px 5px}
+   td{font-size:11.5px;padding:6px 5px;line-height:1.35}
+   .id{font-size:11px} .date{font-size:11px} .date .ago{font-size:10px} .sec{font-size:10.5px}
+   .risk{gap:5px} .risk b{font-size:11px} .risk i{width:30px}
+   .flag::before{margin-top:4px}
+   thead{display:table-header-group}
+   tr{break-inside:avoid}
+   .trail{display:none}
+   .note{break-inside:avoid;margin-top:18px}
+   footer{padding-top:14px}
+ }
+</style></head><body>
+<main>
+
+<!-- ============================== COVER ============================== -->
+<div class="cover" id="top"><div class="wrap">
+  <div class="top">
+    <img class="ib" alt="Infoblox" src="data:image/webp;base64,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">
+    <div class="cust" aria-label="Larkspur Financial">
+      <svg width="150" height="26" viewBox="0 0 150 26" aria-hidden="true">
+        <path d="M4 3h4.6v16.4H17V23H4z" fill="#101820"/>
+        <text x="21" y="19.5" font-family="Inter,Arial,sans-serif" font-weight="700" font-size="17" letter-spacing="1.2" fill="#101820">ARKSPUR</text>
+        <rect x="118" y="6" width="26" height="12" rx="2" fill="#0d6b4e"/>
+        <text x="121" y="15.4" font-family="Inter,Arial,sans-serif" font-weight="700" font-size="8.5" fill="#fff">FIN.</text>
+      </svg>
+    </div>
+  </div>
+
+  <p class="kicker">Threat exposure &middot; Executive summary</p>
+  <h1>What is visible about Larkspur Financial<br>from the outside</h1>
+  <div class="rule"></div>
+  <p class="intro">Infoblox looked for exposure tied to your brand and your domain across breach data,
+    criminal marketplaces and the public web. Each card below is one measurement. The number on the left
+    is the count on the scan date; the text explains what it means and why it matters.</p>
+
+  <div class="facts">
+    <div class="fact"><span>Brand searched</span><b>larkspur</b></div>
+    <div class="fact"><span>Domain searched</span><b>larkspurfinancial.com</b></div>
+    <div class="fact"><span>Scan date</span><b>02 Sep 2026</b></div>
+    <div class="fact"><span>Data source</span><b>Axur (one.axur.com)</b></div>
+  </div>
+  <p class="key"><span><span class="dot r"></span>Red: somebody could use this today.</span>
+    <span><span class="dot a"></span>Amber: exposure that needs one more step first.</span></p>
+
+  <div id="metrics"></div>
+
+  <div class="toc" id="toc"></div>
+  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Passwords are never included in this report.</p>
+</div></div>
+
+<!-- ============================== DETAIL ============================== -->
+<div class="wrap" id="sections"></div>
+
+<div class="wrap">
+  <div class="note"><b>Passwords withheld</b>
+    Axur stores leaked passwords in clear text. This report shows the account and the site it was used on,
+    never the password itself.</div>
+  <footer>External attack surface (servers and services reachable from the internet) is a separate download:
+    one.axur.com/easm, Exposures, Download all.</footer>
+</div>
+</main>
+
+<!-- ------------------------------------------------------------------
+     Dummy data. Shapes and field names match what Axur returns, so the
+     formatters below are the ones the real script would ship.
+     ------------------------------------------------------------------ -->
+<script type="application/json" id="totals">[
+{"name":"Leaked credentials","query":"emailDomain=\"larkspurfinancial.com\"","total":3412},
+{"name":"In plaintext","query":"emailDomain=\"larkspurfinancial.com\" AND passwordType=\"PLAIN\"","total":2906},
+{"name":"Phishing pages","query":"impersonatedBrandsHigh=\"larkspur\"","total":1184},
+{"name":"Lookalike domains","query":"sanitizedDomainLabel=larkspurfinancial~1","total":63},
+{"name":"Mail-enabled lookalikes","query":"domainLabel=larkspurfinancial~1 AND dnsRecordMX=*","total":21}]</script>
+
+<script type="application/json" id="payload">[
+{"name":"Leaked credentials","total":3412,"rows":[
+ {"user":"d.okafor@larkspurfinancial.com","accessUrl":"https://portal.larkspurfinancial.com/login","accessHost":"portal.larkspurfinancial.com","sourceName":"Deep/Dark Web - Telegram","passwordType":"PLAIN","sourceDate":1787507965000,"detectionDate":1788279029171},
+ {"user":"maria.castellanos@larkspurfinancial.com","accessUrl":"https://login.microsoftonline.com","accessHost":"login.microsoftonline.com","sourceName":"Deep/Dark Web - Telegram","passwordType":"PLAIN","sourceDate":1787421565000,"detectionDate":1788192629000},
+ {"user":"t.nakamura@larkspurfinancial.com","accessUrl":null,"accessHost":null,"sourceName":"IntelX","passwordType":"HASH","sourceDate":1762905600000,"detectionDate":1788106229000},
+ {"user":"priya.venkatesan@larkspurfinancial.com","accessUrl":"https://www.linkedin.com/uas/login-submit","accessHost":"www.linkedin.com","sourceName":"Malware log (stealer)","passwordType":"PLAIN","sourceDate":1787075965000,"detectionDate":1787933429000},
+ {"user":"j.brennan@larkspurfinancial.com","accessUrl":"https://larkspur-fin-prod.okta.com/login/login.htm","accessHost":"larkspur-fin-prod.okta.com","sourceName":"Malware log (stealer)","passwordType":"PLAIN","sourceDate":1786989565000,"detectionDate":1787847029000},
+ {"user":"j.brennan@larkspurfinancial.com","accessUrl":"https://app.slack.com/ssb/signin","accessHost":"app.slack.com","sourceName":"Malware log (stealer)","passwordType":"PLAIN","sourceDate":1786989565000,"detectionDate":1787847029000},
+ {"user":"helen.osei@larkspurfinancial.com","accessUrl":"amazon.co.uk","accessHost":"amazon.co.uk","sourceName":"Deep/Dark Web - Telegram","passwordType":"PLAIN","sourceDate":1786644000000,"detectionDate":1787674229000},
+ {"user":"r.lindqvist@larkspurfinancial.com","accessUrl":null,"accessHost":null,"sourceName":"Combolist: Naz.API","passwordType":"PLAIN","sourceDate":1704067200000,"detectionDate":1787587829000},
+ {"user":"samuel.adeyemi@larkspurfinancial.com","accessUrl":"https://secure.docusign.com/member/MemberLogin.aspx","accessHost":"secure.docusign.com","sourceName":"Deep/Dark Web - Telegram","passwordType":"PLAIN","sourceDate":1786384800000,"detectionDate":1787415029000},
+ {"user":"a.fitzgerald@larkspurfinancial.com","accessUrl":"https://www.coursera.org/","accessHost":"www.coursera.org","sourceName":"Deep/Dark Web - Telegram","passwordType":"PLAIN","sourceDate":1786125600000,"detectionDate":1787155829000},
+ {"user":"ines.moreau@larkspurfinancial.com","accessUrl":null,"accessHost":null,"sourceName":"Breach: LinkedIn (2021)","passwordType":"HASH","sourceDate":1624060800000,"detectionDate":1786983029000},
+ {"user":"k.oduya@larkspurfinancial.com","accessUrl":"https://travel.concursolutions.com/","accessHost":"travel.concursolutions.com","sourceName":"Malware log (stealer)","passwordType":"PLAIN","sourceDate":1785780000000,"detectionDate":1786810229000},
+ {"user":"k.oduya@larkspurfinancial.com","accessUrl":"https://myaccount.zoom.us/signin","accessHost":"myaccount.zoom.us","sourceName":"Malware log (stealer)","passwordType":"PLAIN","sourceDate":1785780000000,"detectionDate":1786810229000},
+ {"user":"g.whitcombe@larkspurfinancial.com","accessUrl":"https://mfa.larkspurfinancial.com/adfs/ls/?client-request-id=1e1f0c10-0f6d-4d55-b3c9-2c6d2b0f0d31&wa=wsignin1.0","accessHost":"mfa.larkspurfinancial.com","sourceName":"Malware log (stealer)","passwordType":"PLAIN","sourceDate":1785520800000,"detectionDate":1786551029000},
+ {"user":"l.abernathy@larkspurfinancial.com","accessUrl":null,"accessHost":null,"sourceName":"Breach: Canva (2019)","passwordType":"HASH","sourceDate":1558569600000,"detectionDate":1786464629000}
+]},
+{"name":"In plaintext","total":2906,"rows":"SUBSET:Leaked credentials:passwordType=PLAIN"},
+{"name":"Phishing pages","total":1184,"rows":[
+ {"url":"https://larkspur-secure-login.com/verify/account","domain":"larkspur-secure-login.com","riskScore":92.1,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Phishing","credentialRequested":"Yes","paymentRequested":"No","domainCreationDate":1787356800000,"detectionDate":1788288842802,"countryNames":["Russia"]},
+ {"url":"https://account-larkspurfinancial.support/reset","domain":"account-larkspurfinancial.support","riskScore":88.4,"impersonatedBrandsHigh":["Larkspur Financial","Microsoft"],"contentType":"Phishing","credentialRequested":"Yes","paymentRequested":"No","domainCreationDate":1786924800000,"detectionDate":1788202442000,"countryNames":["Netherlands"]},
+ {"url":"http://larkspurfinancial-refund.net/claim","domain":"larkspurfinancial-refund.net","riskScore":81.0,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Scam","credentialRequested":"No","paymentRequested":"Yes","domainCreationDate":1786665600000,"detectionDate":1788116042000,"countryNames":["United States"]},
+ {"url":"https://larkspur.finance-alerts.info/","domain":"finance-alerts.info","riskScore":74.6,"impersonatedBrandsHigh":["Larkspur Financial","Visa"],"contentType":"Phishing","credentialRequested":"Yes","paymentRequested":"Possibly","domainCreationDate":1785801600000,"detectionDate":1788029642000,"countryNames":["Germany"]},
+ {"url":"https://www.larkspur-financial.app/","domain":"larkspur-financial.app","riskScore":66.3,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Financial","credentialRequested":"Possibly","paymentRequested":"No","domainCreationDate":1784592000000,"detectionDate":1787943242000,"countryNames":["Brazil"]},
+ {"url":"https://larkspur-invest.pro/onboarding","domain":"larkspur-invest.pro","riskScore":58.9,"impersonatedBrandsHigh":["Larkspur Financial","Coinbase","Binance"],"contentType":"Scam","credentialRequested":"No","paymentRequested":"Yes","domainCreationDate":1783987200000,"detectionDate":1787856842000,"countryNames":["Nigeria"]},
+ {"url":"https://m.larkspurfinancial.com.co/","domain":"larkspurfinancial.com.co","riskScore":47.2,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Other","credentialRequested":"No","paymentRequested":"No","domainCreationDate":1712102400000,"detectionDate":1787770442000,"countryNames":["Colombia"]},
+ {"url":"https://larkspur-careers-portal.com/apply","domain":"larkspur-careers-portal.com","riskScore":41.5,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Recruitment","credentialRequested":"Possibly","paymentRequested":"No","domainCreationDate":1780531200000,"detectionDate":1787684042000,"countryNames":["India"]},
+ {"url":"https://facebook.com/LarkspurFinancialOfficial","domain":"facebook.com","riskScore":22.8,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Social media","credentialRequested":"No","paymentRequested":"No","domainCreationDate":857606400000,"detectionDate":1787597642000,"countryNames":["United States"]},
+ {"url":"https://larkspurfinancial.co.uk/","domain":"larkspurfinancial.co.uk","riskScore":9.3,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Financial","credentialRequested":"No","paymentRequested":"No","domainCreationDate":969235200000,"detectionDate":1787511242000,"countryNames":["United Kingdom"]},
+ {"url":"https://mkt.larkspurfinancial.com/protect","domain":"larkspurfinancial.com","riskScore":4.7,"impersonatedBrandsHigh":["Larkspur Financial","Norton"],"contentType":"Financial","credentialRequested":"No","paymentRequested":"Possibly","domainCreationDate":969235200000,"detectionDate":1787424842000,"countryNames":["United States"]},
+ {"url":"https://larkspur-financial-review.blogspot.com/2026/08/is-larkspur-safe.html","domain":"blogspot.com","riskScore":3.1,"impersonatedBrandsHigh":["Larkspur Financial"],"contentType":"Other","credentialRequested":"No","paymentRequested":"No","domainCreationDate":964915200000,"detectionDate":1787338442000,"countryNames":["United States"]}
+]},
+{"name":"Lookalike domains","total":63,"rows":[
+ {"domain":"larkspurfinanciai.com","registrar":"NameCheap Inc","registrantOrganization":"Privacy service","countryNames":["Iceland"],"domainCreationDate":1787270400000,"detectionDate":1787522581567,"dnsEntriesRecordMX":["mx1.privateemail.com"]},
+ {"domain":"larkspurfinancal.com","registrar":"GoDaddy.com LLC","registrantOrganization":"Domains By Proxy LLC","countryNames":["United States"],"domainCreationDate":1786924800000,"detectionDate":1787436181000,"dnsEntriesRecordMX":["mail.larkspurfinancal.com"]},
+ {"domain":"larkspurfinancials.com","registrar":"Tucows Domains Inc","registrantOrganization":"","countryNames":["Canada"],"domainCreationDate":1785801600000,"detectionDate":1787349781000,"dnsEntriesRecordMX":[]},
+ {"domain":"larkspurfinanclal.com","registrar":"Dynadot Inc","registrantOrganization":"","countryNames":["China"],"domainCreationDate":1785369600000,"detectionDate":1787263381000,"dnsEntriesRecordMX":["mx.zoho.com","mx2.zoho.com"]},
+ {"domain":"larkspurfinacial.com","registrar":"PDR Ltd","registrantOrganization":"","countryNames":["India"],"domainCreationDate":1783728000000,"detectionDate":1787176981000,"dnsEntriesRecordMX":[]},
+ {"domain":"larkspurfiancial.com","registrar":"NameSilo LLC","registrantOrganization":"See PrivacyGuardian.org","countryNames":["United States"],"domainCreationDate":1781136000000,"detectionDate":1787090581000,"dnsEntriesRecordMX":["mx1.improvmx.com"]},
+ {"domain":"larkspurfinancial.co","registrar":"GoDaddy.com LLC","registrantOrganization":"","countryNames":["Colombia"],"domainCreationDate":1745539200000,"detectionDate":1787004181000,"dnsEntriesRecordMX":[]},
+ {"domain":"larkspur-financial.com","registrar":"MarkMonitor Inc","registrantOrganization":"Larkspur Financial Group","countryNames":["United States"],"domainCreationDate":1145318400000,"detectionDate":1786917781000,"dnsEntriesRecordMX":["larkspurfinancial-com.mail.protection.outlook.com"]},
+ {"domain":"larkspurfinancial.net","registrar":"MarkMonitor Inc","registrantOrganization":"Larkspur Financial Group","countryNames":["United States"],"domainCreationDate":1145318400000,"detectionDate":1786831381000,"dnsEntriesRecordMX":[]},
+ {"domain":"larkspurfinancial.xyz","registrar":"Porkbun LLC","registrantOrganization":"","countryNames":["United States"],"domainCreationDate":1786060800000,"detectionDate":1786744981000,"dnsEntriesRecordMX":["mx1.forwardemail.net"]}
+]},
+{"name":"Mail-enabled lookalikes","total":21,"rows":"SUBSET:Lookalike domains:mx"}
+]</script>
+
+<script>
+(function(){
+  'use strict';
+  var CUSTOMER = 'Larkspur Financial', BRAND = 'larkspur', DOMAIN = 'larkspurfinancial.com';
+  var SCAN = new Date(2026, 8, 2);   // the scan date, used for "3 days ago"
+  var ROWLIMIT = 50;
+
+  /* ---------- rendering values for a human ---------- */
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function pad2(n){ return (n < 10 ? '0' : '') + n; }
+  function dateOf(v){ if (v === null || v === undefined || v === '') return null; var d = new Date(Number(v)); return isNaN(d) ? null : d; }
+  function fmtDate(d){ return pad2(d.getDate()) + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear(); }
+  function ago(d){
+    var days = Math.round((SCAN - d) / 864e5);
+    if (days < 1) return 'scan day';
+    if (days < 30) return days + (days === 1 ? ' day ago' : ' days ago');
+    if (days < 365) { var mo = Math.round(days / 30.4); return mo + (mo === 1 ? ' month ago' : ' months ago'); }
+    var y = Math.floor(days / 365.25); return y + (y === 1 ? ' year ago' : ' years ago');
+  }
+  function none(){ return '<span class="none">&mdash;</span>'; }
+  // an identifier may break before "@" or after ". / - ? & =", never inside a word
+  function brk(s){ return esc(s).replace(/@/g, '<wbr>@').replace(/([.\/\-?&=])/g, '$1<wbr>'); }
+  function hostOf(url){ var m = String(url || '').match(/^(?:[a-z]+:\/\/)?([^\/?#]+)/i); return m ? m[1] : ''; }
+  var CONTENT = { 'Phishing':'Phishing page', 'Scam':'Scam page', 'Financial':'Financial services',
+                  'Recruitment':'Job offer', 'Social media':'Social profile', 'Other':'Not classified' };
+  var SOURCE = { 'Deep/Dark Web - Telegram':'Telegram channel', 'IntelX':'Breach archive (IntelX)' };
+
+  var F = {
+    text: function(v){ return v ? esc(v) : none(); },
+    idx:  function(v, r, i){ return i + 1; },
+    account: function(v){ return v ? '<span class="id">' + brk(v) + '</span>' : none(); },
+    // the site a password was used on: host first, then the path in a quieter colour
+    site: function(v, r){
+      var url = r.accessUrl || r.url, host = r.accessHost || r.host || hostOf(url) || r.domain;
+      if (!host) return '<span class="none">Not recorded</span>';
+      // the path, without its query string: a session token tells the reader nothing
+      var path = '';
+      if (url) { var m = String(url).replace(/^[a-z]+:\/\//i, '').replace(/^[^\/]*/, '').replace(/[?#].*$/, ''); if (m && m !== '/') path = m; }
+      return '<span class="id">' + brk(host) + (path ? '<span class="p">' + brk(path) + '</span>' : '') + '</span>';
+    },
+    source: function(v){ return v ? esc(SOURCE[v] || v) : none(); },
+    pwd: function(v){
+      if (v === 'PLAIN') return '<span class="flag r">Readable</span>';
+      if (v) return '<span class="flag">Hashed</span>';
+      return none();
+    },
+    date: function(v){
+      var d = dateOf(v); if (!d) return none();
+      return '<span class="date">' + fmtDate(d) + '<span class="ago">' + ago(d) + '</span></span>';
+    },
+    dateOnly: function(v){ var d = dateOf(v); return d ? '<span class="date">' + fmtDate(d) + '</span>' : none(); },
+    // ["Larkspur Financial","Norton"] -> "Larkspur Financial and Norton"; the customer's own name in bold
+    brands: function(v){
+      if (!v || !v.length) return none();
+      var list = v.map(function(b){ var isYou = String(b).toLowerCase().indexOf(BRAND) > -1;
+        return isYou ? '<span class="you">' + esc(b) + '</span>' : esc(b); });
+      var s = list.length === 1 ? list[0] : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
+      return '<span class="brands">' + s + '</span>';
+    },
+    // what the page asks a visitor for, said in words
+    asks: function(v, r){
+      var out = [];
+      if (r.credentialRequested === 'Yes') out.push('<span class="flag r">Login details</span>');
+      else if (r.credentialRequested === 'Possibly') out.push('<span class="flag a">Login details (probable)</span>');
+      if (r.paymentRequested === 'Yes') out.push('<span class="flag r">Payment</span>');
+      else if (r.paymentRequested === 'Possibly') out.push('<span class="flag a">Payment (probable)</span>');
+      return out.length ? out.join('<br>') : '<span class="none">Nothing</span>';
+    },
+    content: function(v){ return v ? esc(CONTENT[v] || v) : none(); },
+    risk: function(v){
+      if (v === null || v === undefined) return none();
+      var n = Number(v), band = n >= 70 ? 'r' : n >= 40 ? 'a' : '';
+      return '<span class="risk ' + band + '"><b>' + n.toFixed(1) + '</b><i style="--w:' + Math.max(2, Math.round(n)) + '%"></i></span>';
+    },
+    domain: function(v){ return v ? '<span class="id">' + brk(v) + '</span>' : none(); },
+    country: function(v){ return v && v.length ? esc(v.join(', ')) : none(); },
+    owner: function(v, r){
+      var o = r.registrantOrganization;
+      if (!o) return '<span class="none">Not disclosed</span>';
+      if (/privacy|proxy|guardian|redacted|withheld/i.test(o)) return '<span class="none">Hidden</span><span class="sec">' + esc(o) + '</span>';
+      return esc(o);
+    },
+    mx: function(v){
+      if (!v || !v.length) return '<span class="flag">No mail set up</span>';
+      return '<span class="flag r">Yes</span><span class="sec id">' + brk(v[0]) + (v.length > 1 ? ' +' + (v.length - 1) : '') + '</span>';
+    }
+  };
+
+  /* ---------- which columns, in which order, at which width ----------
+     Widths are shares of the table (they sum to 100 per table). Reading order: the
+     thing itself, then what it is for / who it pretends to be, then how bad, then when. */
+  var COLS = {
+    'Leaked credentials': [
+      {k:'user',          h:'Account',                 f:'account', w:30, wp:24},
+      {k:'accessHost',    h:'Password used on',        f:'site',    w:25, wp:22},
+      {k:'sourceName',    h:'Where it was found',      f:'source',  w:15, wp:13},
+      {k:'passwordType',  h:'Password',                f:'pwd',     w:10, wp:12},
+      {k:'sourceDate',    h:'Leaked',                  f:'date',    w:10, wp:14.5},
+      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:10, wp:14.5} ],
+    'In plaintext': [
+      {k:'user',          h:'Account',                 f:'account', w:30, wp:28},
+      {k:'accessHost',    h:'Password used on',        f:'site',    w:32, wp:26},
+      {k:'sourceName',    h:'Where it was found',      f:'source',  w:18, wp:16},
+      {k:'sourceDate',    h:'Leaked',                  f:'date',    w:10, wp:15},
+      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:10, wp:15} ],
+    'Phishing pages': [
+      {k:'url',           h:'Page',                    f:'site',    w:27, wp:24},
+      {k:'impersonatedBrandsHigh', h:'Pretends to be', f:'brands',  w:15, wp:14},
+      {k:'contentType',   h:'Kind of page',            f:'content', w:11, wp:10},
+      {k:'credentialRequested', h:'Asks visitors for', f:'asks',    w:14, wp:12},
+      {k:'riskScore',     h:'Risk',                    f:'risk',    w:12, wp:11},
+      {k:'domainCreationDate', h:'Domain registered',  f:'date',    w:10.5, wp:14.5},
+      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:10.5, wp:14.5} ],
+    'Lookalike domains': [
+      {k:'domain',        h:'Domain',                  f:'domain',  w:24, wp:22},
+      {k:'registrantOrganization', h:'Registered to',  f:'owner',   w:18, wp:16},
+      {k:'registrar',     h:'Through',                 f:'text',    w:14, wp:13},
+      {k:'countryNames',  h:'Country',                 f:'country', w:10, wp:10},
+      {k:'dnsEntriesRecordMX', h:'Can send mail',      f:'mx',      w:21, wp:24},
+      {k:'domainCreationDate', h:'Registered',         f:'date',    w:13, wp:15} ],
+    'Mail-enabled lookalikes': [
+      {k:'domain',        h:'Domain',                  f:'domain',  w:24, wp:22},
+      {k:'dnsEntriesRecordMX', h:'Mail goes through',  f:'mx',      w:24, wp:24},
+      {k:'registrantOrganization', h:'Registered to',  f:'owner',   w:16, wp:14},
+      {k:'registrar',     h:'Through',                 f:'text',    w:14, wp:12},
+      {k:'domainCreationDate', h:'Registered',         f:'date',    w:11, wp:14},
+      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:11, wp:14} ]
+  };
+
+  /* ---------- copy ---------- */
+  var TITLES = { 'Leaked credentials':'Exposed credentials', 'In plaintext':'Passwords in readable form',
+                 'Phishing pages':'Impersonation sites', 'Lookalike domains':'Lookalike domains',
+                 'Mail-enabled lookalikes':'Lookalikes that can send mail' };
+  var MEANS = {
+    'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
+    'In plaintext':'The subset of the previous table where the password was stored in readable form. These are the ones to reset first. The password itself is withheld from this report.',
+    'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
+    'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, but it is the first step in most of these attacks. Your own defensive registrations appear here too.',
+    'Mail-enabled lookalikes':'The lookalike domains that already have working mail records. Somebody can send email from them that appears to come from your company, today, with no further setup.'
+  };
+
+  /* ---------- data ---------- */
+  var totals = JSON.parse(document.getElementById('totals').textContent);
+  var payload = JSON.parse(document.getElementById('payload').textContent);
+  var by = {}; payload.forEach(function(d){ by[d.name] = d; });
+  function rowsOf(name){
+    var d = by[name]; if (!d) return [];
+    if (typeof d.rows === 'string') {                    // mockup shortcut: derive the subset tables
+      var p = d.rows.split(':'), src = rowsOf(p[1]);
+      if (p[2] === 'passwordType=PLAIN') return src.filter(function(r){ return r.passwordType === 'PLAIN'; });
+      if (p[2] === 'mx') return src.filter(function(r){ return r.dnsEntriesRecordMX && r.dnsEntriesRecordMX.length; });
+    }
+    return d.rows || [];
+  }
+  var tot = {}; totals.forEach(function(t){ tot[t.name] = t.total; });
+  function n(name){ return tot[name] == null ? null : Number(tot[name]); }
+  function show(v){ return v === null ? '&mdash;' : v.toLocaleString('en-GB'); }
+  function pct(a, b){ return (a && b) ? Math.min(100, Math.round(a / b * 100)) : 0; }
+
+  /* ---------- the summary cards ---------- */
+  var ICON = {
+    lock:'<rect x="4" y="10" width="16" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.5" fill="currentColor"/>',
+    mask:'<circle cx="12" cy="8" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 20c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    site:'<rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 9.5h18" stroke="currentColor" stroke-width="1.8"/><path d="M12 12.5v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    risk:'<path d="M12 4 21 20H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4M12 16.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  };
+  var CARDS = [
+    { icon:'lock', title:'Exposed credentials', go:1,
+      big:n('Leaked credentials'), lab:'work accounts whose password has leaked', sev:'a',
+      sub:n('In plaintext'), subLab:'of them with the password in readable form, usable today', subSev:'r',
+      desc:'Accounts on ' + DOMAIN + ' whose passwords have already been exposed somewhere outside your company.',
+      why:'They come from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware.' },
+    { icon:'mask', title:'Impersonation sites', go:3,
+      big:n('Phishing pages'), lab:'web pages built to look like ' + CUSTOMER, sev:'r',
+      desc:'Pages designed so that a customer or an employee hands over a login or a card number, believing they are dealing with you.',
+      why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out.' },
+    { icon:'site', title:'Lookalike domains', go:4,
+      big:n('Lookalike domains'), lab:'registered names one character away from yours', sev:'a',
+      sub:n('Mail-enabled lookalikes'), subLab:'of them can already send email that appears to come from you', subSev:'r',
+      desc:'Domain names one swapped, dropped or doubled letter away from ' + DOMAIN + '. They exist to be mistaken for you.',
+      why:'A lookalike is only a nuisance until someone sets up email on it. At that point it can send a message that appears to come from your company.' },
+    { icon:'risk', title:'External attack surface', aside:true,
+      desc:'The servers, services and open doors reachable from the public internet under your name.',
+      why:'Not counted in this report. It comes from a different Axur screen and is supplied as a separate file.' }
+  ];
+  document.getElementById('metrics').innerHTML = CARDS.map(function(c){
+    var fig = '';
+    if (!c.aside) {
+      fig = '<div class="fig"><div class="big sev-' + c.sev + '">' + show(c.big) + '</div><div class="lab">' + c.lab + '</div>';
+      if (c.sub != null) {
+        fig += '<div class="meter"><i style="width:' + pct(c.sub, c.big) + '%"></i></div>' +
+               '<div class="sub"><b>' + show(c.sub) + '</b>' + c.subLab + '</div>';
+      }
+      fig += '</div>';
+    }
+    return '<div class="card' + (c.aside ? ' aside' : '') + '">' + fig +
+      '<div class="txt"><h2><svg viewBox="0 0 24 24" aria-hidden="true">' + ICON[c.icon] + '</svg>' + c.title + '</h2>' +
+      '<p>' + c.desc + '</p><p>' + c.why + '</p>' +
+      (c.go ? '<a class="go" href="#s' + c.go + '"><span class="n">SECTION 0' + c.go + '</span> See the records &rarr;</a>' : '') +
+      '</div></div>';
+  }).join('');
+
+  document.getElementById('toc').innerHTML = '<div class="h">The records behind the numbers</div>' +
+    totals.map(function(t, i){ return '<span class="n">0' + (i + 1) + '</span><a href="#s' + (i + 1) + '"><span class="n">0' + (i + 1) +
+      '&ensp;</span>' + TITLES[t.name] + ' <span class="n">&middot; ' + show(n(t.name)) + '</span></a>'; }).join('');
+
+  /* ---------- the detail sections ---------- */
+  var secs = document.getElementById('sections'), TOTAL = totals.length;
+  totals.forEach(function(t, i){
+    var no = '0' + (i + 1), rs = rowsOf(t.name).slice(0, ROWLIMIT), cs = COLS[t.name] || [];
+    var s = document.createElement('section'); s.className = 'section'; s.id = 's' + (i + 1);
+    var html =
+      '<div class="strip"><span class="n"><b>' + no + '</b> / 0' + TOTAL + '</span>' +
+        '<span class="name">' + TITLES[t.name] + '</span><span class="cust">' + CUSTOMER + ' &middot; threat exposure</span>' +
+        '<a class="up" href="#top">&uarr; Summary</a></div>' +
+      '<div class="bar"><i style="width:' + Math.round((i + 1) / TOTAL * 100) + '%"></i></div>' +
+      '<h2><span class="num">' + no + '</span>' + TITLES[t.name] +
+        '<span class="cnt"><b>' + show(n(t.name)) + '</b> records &middot; first ' + rs.length + ' shown</span></h2>' +
+      '<p class="means">' + MEANS[t.name] + '</p>' +
+      '<div class="query"><span>Axur search</span>' + esc(t.query) + '</div>';
+    if (!rs.length) { html += '<p class="more">No records returned.</p>'; }
+    else {
+      html += '<table><colgroup><col style="--w:4%">' +
+        cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') + '</colgroup>' +
+        '<thead><tr><th class="idx">#</th>' + cs.map(function(c){ return '<th>' + c.h + '</th>'; }).join('') + '</tr></thead><tbody>';
+      rs.forEach(function(r, ri){
+        html += '<tr><td class="idx">' + (ri + 1) + '</td>' +
+          cs.map(function(c){ return '<td>' + F[c.f](r[c.k], r, ri) + '</td>'; }).join('') + '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '<p class="more">The first ' + rs.length + ' of ' + show(n(t.name)) + ' records. "Found by Axur" is the day the record reached Axur, which can be long after the event itself.</p>' +
+      '<div class="trail"><a class="up" href="#top">&uarr; Back to the summary</a>' +
+      (i + 1 < TOTAL ? '<a class="next" href="#s' + (i + 2) + '">0' + (i + 2) + ' &middot; ' + TITLES[totals[i + 1].name] + ' &rarr;</a>'
+                     : '<a class="next" href="#top">Back to the summary &uarr;</a>') + '</div>';
+    s.innerHTML = html; secs.appendChild(s);
+  });
+  document.documentElement.setAttribute('data-report-ready', '1');
+})();
+</script>
+</body></html>

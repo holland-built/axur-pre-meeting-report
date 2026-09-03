@@ -2,8 +2,8 @@
 """Rebuild the Windows script and the guide's download buttons.
 
 The report's HTML lives once, in axur-report.sh. This lifts it out, wraps it in
-the PowerShell below, and pushes both scripts back into docs/index.html so
-its download buttons never serve stale code.
+the PowerShell below, and pushes both scripts back into guide.html so its
+download buttons never serve stale code.
 
     python3 tools/build.py
 
@@ -223,8 +223,12 @@ $tail = @'
 ###HTMLTAIL###
 '@
 
+$now = Get-Date
 $head = $head.Replace('{{BRAND}}', $Brand).Replace('{{DOMAIN}}', $Domain).
-              Replace('{{LOGO}}', $logo).Replace('{{OURS}}', $ours)
+              Replace('{{LOGO}}', $logo).Replace('{{OURS}}', $ours).
+              Replace('{{DATE_ISO}}',   $now.ToString('yyyy-MM-dd')).
+              Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
+              Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy'))
 $tail = $tail.Replace('ROWSVALUE', "$Rows")
 
 function Esc($s) { ($s -replace '\\', '\\' -replace '"', '\"') }
@@ -296,6 +300,17 @@ def build_powershell(sh_text):
     for var, ph in (("BRAND", "{{BRAND}}"), ("DOMAIN", "{{DOMAIN}}"),
                     ("LOGO", "{{LOGO}}"), ("OURS", "{{OURS}}")):
         head = head.replace("${%s}" % var, ph).replace("$" + var, ph)
+
+    # The cover carries shell date expressions. PowerShell cannot run those, so
+    # without this the customer's report literally reads $(date '+%d %B %Y').
+    for expr, ph in (("$(date '+%Y-%m-%d')", "{{DATE_ISO}}"),
+                     ("$(date '+%d %B %Y')", "{{DATE_LONG}}"),
+                     ("$(date '+%d %b %Y')", "{{DATE_SHORT}}")):
+        head = head.replace(expr, ph)
+    left = [l for l in head.split("\n") if "$(" in l]
+    if left:
+        sys.exit("unhandled shell expression in HTMLHEAD, PowerShell cannot run it:\n  "
+                 + "\n  ".join(left[:3]))
 
     for name, text in (("HTMLHEAD", head), ("HTMLTAIL", tail)):
         for bad in ("'@", '"@'):
