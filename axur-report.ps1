@@ -227,9 +227,10 @@ $head = @'
  .wrap{max-width:1180px;margin:0 auto;padding:0 40px}
 
  /* =================== page one: the cover =================== */
- .cover{background:var(--black);color:#fff;padding:40px 0 44px;
+ .cover{background:var(--black);color:#fff;padding:56px 0 48px;
         background-image:radial-gradient(1100px 520px at 88% -10%,rgba(0,226,236,.14),transparent 62%)}
- .cover .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px;gap:24px}
+ /* the marks are 144px, so the gap under them has to carry that weight */
+ .cover .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:64px;gap:24px}
  /* Both marks are the same height: neither company outranks the other here. */
  .cover .top img.ib{height:144px;width:auto;display:block}
  /* Brandfetch hands over 400x400, so the customer mark can carry the corner */
@@ -361,7 +362,7 @@ $head = @'
    @page cover{margin:0}
    .cover{page:cover;min-height:297mm;padding:8mm 0 6mm;break-after:page}
    .cover .wrap{padding:0 13mm}
-   .cover .top{margin-bottom:8px}
+   .cover .top{margin-bottom:26px}
    .cover .top img.ib{height:96px} .cover .top img.cust{height:96px;max-width:300px;padding:10px 14px}
    .cover .top .nm{font-size:20px}
    .wrap{padding:0;max-width:none}
