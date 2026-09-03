@@ -401,10 +401,11 @@ cat <<HTMLHEAD
  .cover{background:var(--black);color:#fff;padding:40px 0 44px;
         background-image:radial-gradient(1100px 520px at 88% -10%,rgba(0,226,236,.14),transparent 62%)}
  .cover .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px;gap:24px}
- .cover .top img.ib{height:36px;width:auto;display:block}
+ /* Both marks are the same height: neither company outranks the other here. */
+ .cover .top img.ib{height:144px;width:auto;display:block}
  /* Brandfetch hands over 400x400, so the customer mark can carry the corner */
- .cover .top img.cust{height:84px;width:auto;max-width:300px;object-fit:contain;display:block;
-        background:#fff;border-radius:10px;padding:10px 14px}
+ .cover .top img.cust{height:144px;width:auto;max-width:420px;object-fit:contain;display:block;
+        background:#fff;border-radius:14px;padding:14px 20px}
  /* when the logo fails to load the name is written out instead */
  .cover .top .nm{display:none;font-size:24px;font-weight:600;letter-spacing:.2px;color:#fff}
  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--cyan);margin:0 0 8px}
@@ -520,7 +521,8 @@ cat <<HTMLHEAD
    .card{grid-template-columns:1fr;row-gap:14px}
    .fig{border-right:0;border-bottom:1px solid #c5cbcd;padding:0 0 14px}
    .facts{flex-direction:column} .fact{border-right:0;border-bottom:1px solid #2c3640}
-   .cover .top img.cust{height:60px;max-width:200px}
+   .cover .top img.ib{height:84px}
+   .cover .top img.cust{height:84px;max-width:240px}
    table{table-layout:auto}
  }
 
@@ -531,7 +533,7 @@ cat <<HTMLHEAD
    .cover{page:cover;min-height:297mm;padding:8mm 0 6mm;break-after:page}
    .cover .wrap{padding:0 13mm}
    .cover .top{margin-bottom:8px}
-   .cover .top img.ib{height:26px} .cover .top img.cust{height:54px;max-width:220px;padding:7px 11px}
+   .cover .top img.ib{height:96px} .cover .top img.cust{height:96px;max-width:300px;padding:10px 14px}
    .cover .top .nm{font-size:20px}
    .wrap{padding:0;max-width:none}
    body{font-size:12.5px}
