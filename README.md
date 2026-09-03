@@ -38,6 +38,8 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 | `--domain customer.com` | `-Domain` | Customer domain |
 | `--key` | `-ApiKey` | Your API key |
 | `--rows 50` | `-Rows` | Rows listed under each count |
+| `--wait 300` | `-Wait` | Seconds to let each search finish before reading its count |
+| `--drop-own` | `-DropOwn` | Drop the customer's own domain from the results |
 | `--min-score N` | `-MinScore` | Drop rows scoring below N |
 | `--exclude LIST` | `-Exclude` | Drop rows matching these, comma separated. Repeatable |
 | `--exclude-file F` | `-ExcludeFile` | Same, read from a file or CSV |
@@ -77,7 +79,20 @@ bash axur-report.sh --domain customer.com --exclude-file known-good.csv
 The headline number is recounted over the rows that survive, so the count and
 the table below it always agree. To count over the whole result rather than the
 first page, the script walks the pages while a filter is on. If it reaches its
-page cap it says so, and that count came from a partial pull.
+page cap it says so on the terminal and in the report footer, and that count
+came from a partial pull.
+
+The customer's own sites match these searches without impersonating anyone.
+`--drop-own` removes them. It is not the default, because any filter forces the
+full page walk.
+
+## Counts that are still climbing
+
+Axur answers with a total long before it has finished searching. The script
+waits for the search to report itself finished, up to `--wait` seconds, and
+prints "at least N" for any that had not. Those also carry a line in the report
+footer, so the customer is not shown a fraction as if it were the whole. A large
+tenant needs a longer wait.
 
 Filters only touch the three domain searches. A leaked credential has no score
 and no domain to exclude on.

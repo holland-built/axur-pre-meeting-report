@@ -458,7 +458,7 @@ $head = @'
   <div id="metrics"></div>
 
   <div class="toc" id="toc"></div>
-  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Passwords are never included in this report.</p>
+  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Passwords are never included in this report.$CAVEAT</p>
 </div></div>
 
 <div class="wrap" id="sections"></div>
@@ -673,7 +673,7 @@ $tail = @'
       {k:'registrantOrganization', h:'Registered to',  f:'owner',   w:18, wp:16},
       {k:'registrar',     h:'Through',                 f:'text',    w:14, wp:15},
       {k:'countryNames',  h:'Country',                 f:'country', w:10, wp:10},
-      {k:'dnsEntriesRecordMX', h:'Can send mail',      f:'mx',      w:21, wp:22},
+      {k:'dnsEntriesRecordMX', h:'Mail set up',        f:'mx',      w:21, wp:22},
       {k:'domainCreationDate', h:'Registered',         f:'date',    w:13, wp:15} ],
     // this search returns page hits, so the same domain can fill the table; the page path is what tells rows apart
     'Mail-enabled lookalikes': [
@@ -700,14 +700,14 @@ $tail = @'
   /* ---------- copy ---------- */
   var TITLES = { 'Leaked credentials':'Exposed credentials', 'In plaintext':'Passwords in readable form',
                  'Phishing pages':'Impersonation sites', 'Lookalike domains':'Lookalike domains',
-                 'Mail-enabled lookalikes':'Lookalikes that can send mail' };
+                 'Mail-enabled lookalikes':'Lookalikes with mail switched on' };
   function heading(name){ return TITLES[name] || name; }
   var MEANS = {
     'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
     'In plaintext':'The subset of the previous table where the password was stored in readable form. These are the ones to reset first. The password itself is withheld from this report.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
     'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, but it is the first step in most of these attacks. Your own defensive registrations appear here too.',
-    'Mail-enabled lookalikes':'The lookalike domains that already have working mail records. Somebody can send email from them that appears to come from your company, today, with no further setup.'
+    'Mail-enabled lookalikes':'The lookalike domains with mail records already published. A domain set up to receive mail is a domain someone is running as a mailbox, not parking, so these are the ones being used rather than merely bought.'
   };
 
   /* ---------- the summary cards ---------- */
@@ -730,9 +730,9 @@ $tail = @'
       why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out.' },
     { icon:'site', title:'Lookalike domains', go:sectionOf('Lookalike domains'),
       big:n('Lookalike domains'), lab:'registered names one character away from yours', sev:'a',
-      sub:n('Mail-enabled lookalikes'), subLab:'of them can already send email that appears to come from you', subSev:'r',
+      sub:n('Mail-enabled lookalikes'), subLab:'of them have mail switched on, so somebody is running them', subSev:'r',
       desc:'Domain names one swapped, dropped or doubled letter away from ' + esc(DOMAIN) + '. They exist to be mistaken for you.',
-      why:'A lookalike is only a nuisance until someone sets up email on it. At that point it can send a message that appears to come from your company.' },
+      why:'A parked lookalike is a nuisance. One with mail records published is being run by somebody, and is the more likely to be used against your staff or your customers.' },
     { icon:'risk', title:'External attack surface', aside:true,
       desc:'The servers, services and open doors reachable from the public internet under your name.',
       why:'Not counted in this report. It comes from a different Axur screen and is supplied as a separate file.' }
