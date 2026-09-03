@@ -4,7 +4,10 @@ One script asks Axur what it knows about a prospect and writes the answer as a
 report you can send. Five numbers: leaked credentials, readable passwords,
 impersonation sites, lookalike domains, and the lookalikes that can send mail.
 
-You need an Axur API key, and Chrome or Edge for the PDF. Nothing else.
+You need an Axur API key, and Chrome or Edge for the PDF.
+
+Nothing to install: the Mac script uses curl, sed and perl, all of which ship
+with macOS, and the Windows script is PowerShell only.
 
 ## Get a key
 
@@ -36,7 +39,8 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 | `--key` | `-ApiKey` | Your API key |
 | `--rows 50` | `-Rows` | Rows listed under each count |
 | `--min-score N` | `-MinScore` | Drop rows scoring below N |
-| `--exclude LIST` | `-Exclude` | Drop rows matching these, comma separated |
+| `--exclude LIST` | `-Exclude` | Drop rows matching these, comma separated. Repeatable |
+| `--exclude-file F` | `-ExcludeFile` | Same, read from a file or CSV |
 | `--out FILE` | `-Out` | Output file |
 | `--no-pdf` | `-NoPdf` | Write the HTML only |
 | `--no-open` | `-NoOpen` | Print the path instead of opening it |
@@ -49,6 +53,24 @@ Both flags take them out:
 ```bash
 bash axur-report.sh --domain customer.com --min-score 50 --exclude ".au,partner.com"
 ```
+
+A customer's own domains run to dozens, so keep them in a file instead of on
+the command line. One per line, or the first column of a CSV — a `domain`
+header row is skipped, so a sheet exported from Excel works as it is, and `#`
+starts a comment:
+
+```
+domain,note
+xyz.com,ours
+.au,customer region
+partner.co.uk,"reseller, agreed"
+```
+
+```bash
+bash axur-report.sh --domain customer.com --exclude-file known-good.csv
+```
+
+`--exclude` can be given more than once, and adds to whatever the file holds.
 
 The headline number is recounted over the rows that survive, so the count and
 the table below it always agree. To count over the whole result rather than the

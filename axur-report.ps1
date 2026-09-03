@@ -9,6 +9,8 @@
     -Rows N         rows listed under each count (default 50)
     -MinScore N     drop rows scoring below N (lookalike and phishing only)
     -Exclude LIST   drop rows matching these, comma separated. ".au,known.com"
+    -ExcludeFile F  same, read from a file or CSV. One per line, first column,
+                    # starts a comment
     -Out FILE       output file (default axur-report-<domain>.html)
     -NoPdf          write only the HTML
     -NoOpen         do not open the report when it is done
@@ -19,7 +21,7 @@
 #>
 param(
   [string]$Brand, [string]$Domain, [string]$ApiKey,
-  [int]$Rows = 50, [string]$MinScore, [string]$Exclude, [string]$Out,
+  [int]$Rows = 50, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
   [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
 
@@ -74,6 +76,18 @@ if (-not $ours) { $ours = "https://cdn.brandfetch.io/infoblox.com/w/400/h/400" }
 
 $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
 $patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ })
+
+# A customer's own domains run to dozens, so take them from a file as well as
+# the command line. One per line, or the first column of a CSV. A "domain"
+# header row is skipped, so a sheet exported straight from Excel works.
+if ($ExcludeFile) {
+  if (-not (Test-Path $ExcludeFile)) { Write-Error "Cannot read $ExcludeFile"; exit 1 }
+  $fromFile = Get-Content $ExcludeFile | ForEach-Object {
+    ($_ -replace '#.*', '').Split(',')[0].Trim().Trim('"').Trim("'")
+  } | Where-Object { $_ -and $_ -notmatch '^(?i)domains?$' }
+  $patterns += $fromFile
+  Write-Host "Excluding $($patterns.Count) patterns from $ExcludeFile"
+}
 $anyFilter = ($MinScore -or $patterns.Count)
 $partial = @()
 

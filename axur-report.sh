@@ -9,6 +9,9 @@
 #   --rows N          rows to pull behind each number (default 50)
 #   --min-score N     drop rows scoring below N (lookalike and phishing only)
 #   --exclude LIST    drop rows matching these, comma separated. ".au,known.com"
+#                     repeatable, so several --exclude add up
+#   --exclude-file F  same, read from a file or CSV. One per line, first column,
+#                     # starts a comment
 #   --out FILE        output file (default axur-report-<domain>.html)
 #   --no-pdf          write only the HTML
 #   --no-open         do not open the report when it is done
@@ -16,7 +19,7 @@
 
 API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
-MINSCORE=""; EXCLUDE=""; PAGECAP=40
+MINSCORE=""; EXCLUDE=""; EXCLUDEFILE=""; PAGECAP=40
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -25,13 +28,14 @@ while [ $# -gt 0 ]; do
     --key)        KEY="$2"; shift 2 ;;
     --rows)       ROWS="$2"; shift 2 ;;
     --min-score)  MINSCORE="$2"; shift 2 ;;
-    --exclude)    EXCLUDE="$2"; shift 2 ;;
+    --exclude)    EXCLUDE="${EXCLUDE:+$EXCLUDE,}$2"; shift 2 ;;
+    --exclude-file) EXCLUDEFILE="$2"; shift 2 ;;
     --brandfetch) BFID="$2"; shift 2 ;;
     --out)        OUT="$2"; shift 2 ;;
     --debug)      DEBUG=1; shift ;;
     --no-pdf)     NOPDF=1; shift ;;
     --no-open)    NOOPEN=1; shift ;;
-    -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,18p' "$0"; exit 0 ;;
     *)            echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -63,6 +67,24 @@ if [ -n "$BFID" ]; then
 else
   LOGO="https://cdn.brandfetch.io/$DOMAIN/w/400/h/400"
   OURS="https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
+fi
+
+# A customer's own domains run to dozens, so take them from a file as well as
+# the command line. One per line, or the first column of a CSV. A "domain"
+# header row is skipped, so a sheet exported straight from Excel works.
+if [ -n "$EXCLUDEFILE" ]; then
+  if [ ! -r "$EXCLUDEFILE" ]; then
+    echo "Cannot read $EXCLUDEFILE" >&2; exit 1
+  fi
+  FROMFILE=$(sed 's/\r$//; s/#.*//' "$EXCLUDEFILE" \
+             | cut -d, -f1 \
+             | tr -d '"'"'"'"' \
+             | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+             | grep -v '^$' \
+             | grep -viE '^domains?$' \
+             | paste -sd, -)
+  [ -n "$FROMFILE" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$FROMFILE"
+  echo "Excluding $(printf '%s' "$EXCLUDE" | tr ',' '\n' | grep -c .) patterns from $EXCLUDEFILE"
 fi
 
 TMP=$(mktemp -d)
@@ -243,7 +265,14 @@ print $out;
 print STDERR "$kept\n";
 PERL
 
-if [ -n "$MINSCORE$EXCLUDE" ] && [ -x /usr/bin/perl ]; then
+# Silently ignoring a filter would hand the SE an unfiltered report that looks
+# filtered, so say so and stop rather than guess what they meant.
+if [ -n "$MINSCORE$EXCLUDE" ] && [ ! -x /usr/bin/perl ]; then
+  echo "--min-score and --exclude need perl, and /usr/bin/perl is not here." >&2
+  echo "Drop the filters, or install perl, rather than send an unfiltered report." >&2
+  exit 1
+fi
+if [ -n "$MINSCORE$EXCLUDE" ]; then
   printf 'Applying filters   '
   for f in "$TMP"/*.json; do
     grep -q '"source":"signal-lake"\|signal-lake' "$f" 2>/dev/null || true
