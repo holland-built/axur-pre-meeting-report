@@ -6,6 +6,8 @@
 
   Anything you leave off, it asks for.
 
+    -Config FILE    read customer settings from FILE. Command-line flags win
+    -SaveConfig F   save this run's customer settings to F (never the API key)
     -Rows N         rows listed under each count (default 50)
     -Wait SECONDS   how long to let each search finish (default 300)
     -MinScore N     drop rows scoring below N (lookalike and phishing only)
@@ -24,7 +26,7 @@
   there, not here, then re-run the generator.
 #>
 param(
-  [string]$Brand, [string]$Domain, [string]$ApiKey,
+  [string]$Brand, [string]$Domain, [string]$ApiKey, [string]$Config, [string]$SaveConfig,
   [int]$Rows = 50, [int]$Wait = 300, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
   [string]$Logo, [switch]$NoLogo, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
@@ -32,6 +34,53 @@ param(
 $ErrorActionPreference = 'Stop'
 $api = "https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 $PageCap = 40
+
+function Expand-UserPath($path) {
+  if (-not $path) { return $path }
+  if ($path -eq '~') { return [Environment]::GetFolderPath('UserProfile') }
+  if ($path.StartsWith('~/') -or $path.StartsWith('~\')) {
+    return Join-Path ([Environment]::GetFolderPath('UserProfile')) $path.Substring(2)
+  }
+  return $path
+}
+
+# Load the config first, but only fill parameters that were not supplied on the
+# command line. The API key is deliberately not a recognized config key.
+if ($Config) {
+  $Config = Expand-UserPath $Config
+  if (-not (Test-Path -LiteralPath $Config -PathType Leaf)) {
+    Write-Host "Config file not found or not readable: $Config"
+    exit 1
+  }
+  $lineNumber = 0
+  foreach ($line in Get-Content -LiteralPath $Config) {
+    $lineNumber++
+    $text = $line.Trim()
+    if (-not $text -or $text.StartsWith('#')) { continue }
+    if ($text -notmatch '^([^=]+?)\s*=\s*(.*)$') {
+      Write-Host "Warning: ignoring config line $lineNumber without '=' in $Config"
+      continue
+    }
+    $name = $matches[1].Trim(); $value = $matches[2].Trim()
+    switch -CaseSensitive ($name) {
+      'brand'        { if (-not $PSBoundParameters.ContainsKey('Brand'))       { $Brand = $value } }
+      'domain'       { if (-not $PSBoundParameters.ContainsKey('Domain'))      { $Domain = $value } }
+      'logo'         { if (-not $PSBoundParameters.ContainsKey('Logo'))        { $Logo = Expand-UserPath $value } }
+      'min-score'    { if (-not $PSBoundParameters.ContainsKey('MinScore'))    { $MinScore = $value } }
+      'exclude-file' { if (-not $PSBoundParameters.ContainsKey('ExcludeFile')) { $ExcludeFile = Expand-UserPath $value } }
+      'rows'         {
+        if (-not $PSBoundParameters.ContainsKey('Rows')) {
+          $parsedRows = 0
+          if (-not [int]::TryParse($value, [ref]$parsedRows)) {
+            Write-Host "Rows in config must be a number, not '$value'."; exit 1
+          }
+          $Rows = $parsedRows
+        }
+      }
+      default { Write-Host "Warning: unknown config key '$name' in $Config; ignoring it" }
+    }
+  }
+}
 
 function Ask($current, $prompt, $hidden) {
   if ($current) { return $current }
@@ -53,6 +102,21 @@ $parts = $Domain.Split('.') | Where-Object { $_ }
 if ($parts.Count -gt 2) { $parts = $parts[-3..-1] }
 $label = $parts[0]
 if (-not $Out) { $Out = "axur-report-$Domain.html" }
+
+if ($SaveConfig) {
+  $SaveConfig = Expand-UserPath $SaveConfig
+  $settings = @(
+    "brand        = $Brand"
+    "domain       = $Domain"
+    "logo         = $Logo"
+    "min-score    = $MinScore"
+    "exclude-file = $ExcludeFile"
+    "rows         = $Rows"
+  )
+  try { Set-Content -LiteralPath $SaveConfig -Value $settings -Encoding UTF8 }
+  catch { Write-Host "Could not write config file: $SaveConfig"; exit 1 }
+  Write-Host "Saved config: $SaveConfig"
+}
 
 $headers = @{ Authorization = "Bearer $ApiKey" }
 
@@ -149,7 +213,12 @@ function Start-Search($name, $source, $query) {
       $c = $null
       if ($_.Exception.Response) { $c = [int]$_.Exception.Response.StatusCode }
       # the gateway allows 30 calls a window, so wait it out rather than failing
-      if ($c -eq 429 -and $attempt -lt 3) { $attempt++; Write-Host -NoNewline "w"; Start-Sleep -Seconds 25; continue }
+      if ($c -eq 429 -and $attempt -lt 3) {
+        $attempt++
+        Write-Host "    rate limited; retrying $name after 25 seconds"
+        Start-Sleep -Seconds 25
+        continue
+      }
       Write-Host -NoNewline ("{0,-26}" -f $name)
       switch ($c) {
         401 { Write-Host " key rejected (401). Generate a new one in My preferences." }
@@ -160,7 +229,7 @@ function Start-Search($name, $source, $query) {
       return [pscustomobject]@{ name = $name; query = $query; id = $null }
     }
   }
-  Write-Host "  started $name"
+  Write-Host ("  {0,-26} started" -f $name)
   return [pscustomobject]@{ name = $name; query = $query; id = $start.searchId }
 }
 
@@ -169,13 +238,12 @@ function Complete-Search($job) {
   if (-not $id) {
     return [pscustomobject]@{ name = $name; query = $query; total = $null; raw = '{"result":{"data":[]}}' }
   }
-  Write-Host -NoNewline ("{0,-26}" -f $name)
   # Axur answers with a total long before it has finished searching: the reply
   # carries running=true and a totalResults still climbing. Taking the first
   # number reports a fraction as if it were the whole.
   $total = $null; $raw = $null; $running = $true
   for ($i = 0; $i -lt [int]($Wait / 2); $i++) {
-    Start-Sleep -Seconds 2; Write-Host -NoNewline "."
+    Start-Sleep -Seconds 2
     try { $r = Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
     $raw = $r.Content
     $o = $raw | ConvertFrom-Json
@@ -183,13 +251,13 @@ function Complete-Search($job) {
     $running = [bool]$o.result.status.running
     if (-not $running -and $null -ne $total) { break }
   }
-  if ($null -eq $total) { Write-Host " timed out" }
+  if ($null -eq $total) { Write-Host ("  {0,-26} timed out" -f $name) }
   elseif ($running) {
-    Write-Host -NoNewline " at least $total (still searching after ${Wait}s)"
+    Write-Host ("  {0,-26} at least $total (still searching after ${Wait}s)" -f $name)
     $script:incomplete += $name
   }
-  else { Write-Host -NoNewline " $total" }
-  if ($ShowRaw) { Write-Host ""; Write-Host "  $raw" }
+  else { Write-Host ("  {0,-26} done: $total" -f $name) }
+  if ($ShowRaw) { Write-Host "  $raw" }
 
   $doc = if ($raw) { $raw | ConvertFrom-Json } else { $null }
   $rows = @(); if ($doc) { $rows = @($doc.result.data) }
@@ -207,7 +275,7 @@ function Complete-Search($job) {
       $pr = @($pd.result.data)
       if (-not $pr.Count) { break }
       if (($pr[0] | ConvertTo-Json -Compress) -eq $firstKey) { break }
-      $rows += $pr; Write-Host -NoNewline "+"
+      $rows += $pr
       $p++
     }
     if ($p -gt $PageCap) { $script:partial += $name }
@@ -215,10 +283,10 @@ function Complete-Search($job) {
 
   if ($anyFilter -and $filtered -contains $name -and $rows.Count) {
     $kept = @($rows | Where-Object { Test-Keep $_ })
-    Write-Host " -> $($kept.Count) after filters"
+    Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
     $rows = $kept
     $total = $kept.Count   # the tile and the table below it must agree
-  } else { Write-Host "" }
+  }
 
   # never let a leaked password reach the report file
   # Any field whose NAME carries password or hash goes, whatever its type: the
@@ -239,7 +307,7 @@ function Complete-Search($job) {
 }
 
 Write-Host ""
-Write-Host "Axur pre-meeting report: $Brand"
+Write-Host "Searching for $Brand ($Domain)"
 Write-Host "-------------------------------------------"
 $jobs = @(
   (Start-Search "Leaked credentials"         "credential"  "emailDomain=`"$Domain`""),
@@ -901,7 +969,6 @@ $doc = $head + "`n" +
 [IO.File]::WriteAllText($Out, $doc, (New-Object Text.UTF8Encoding $false))
 $abs = (Resolve-Path $Out).Path
 Write-Host "done"
-Write-Host "Wrote $abs"
 if ($incomplete.Count) {
   Write-Host "Note: these had not finished when the wait ran out, so their counts are a"
   Write-Host "floor, not a total. Re-run with a longer -Wait: $($incomplete -join ', ')"
@@ -911,7 +978,7 @@ if ($partial.Count) {
 }
 
 # Edge ships with Windows and prints without opening a window
-$done = $abs
+$done = $abs; $pdfWritten = ""
 if (-not $NoPdf) {
   $browser = @(
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
@@ -924,12 +991,22 @@ if (-not $NoPdf) {
     Write-Host -NoNewline "Making the PDF"
     & $browser --headless --disable-gpu --no-pdf-header-footer `
                --virtual-time-budget=15000 "--print-to-pdf=$pdf" "file:///$($abs -replace '\\','/')" 2>$null | Out-Null
-    if (Test-Path $pdf) { Write-Host " ... wrote $pdf"; $done = $pdf }
+    if (Test-Path $pdf) { Write-Host " ... wrote $pdf"; $done = $pdf; $pdfWritten = $pdf }
     else { Write-Host " ... failed. Open the HTML and press Ctrl+P." }
   } else {
     Write-Host "No Edge or Chrome found, so no PDF. Open the HTML and press Ctrl+P."
   }
 }
+
+Write-Host ""
+Write-Host "Summary"
+foreach ($result in $results) {
+  $count = if ($null -eq $result.total) { 'not available' } else { [string]$result.total }
+  Write-Host ("  {0,-26} {1}" -f $result.name, $count)
+}
+Write-Host "Files written"
+Write-Host "  HTML: $abs"
+if ($pdfWritten) { Write-Host "  PDF:  $pdfWritten" }
 
 if ($NoOpen) { Write-Host "Open it with:  Invoke-Item `"$done`"" } else { Invoke-Item $done }
 Write-Host ""

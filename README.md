@@ -34,6 +34,8 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 
 | Flag | PowerShell | What it does |
 |---|---|---|
+| `--config delta.conf` | `-Config delta.conf` | Read customer settings from a config file; command-line flags override it |
+| `--save-config delta.conf` | `-SaveConfig delta.conf` | Save this run's customer settings, never the API key |
 | `--brand "BRAND"` | `-Brand` | Brand, as Axur spells it |
 | `--domain customer.com` | `-Domain` | Customer domain |
 | `--key` | `-ApiKey` | Your API key |
@@ -48,6 +50,41 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 | `--out FILE` | `-Out` | Output file |
 | `--no-pdf` | `-NoPdf` | Write the HTML only |
 | `--no-open` | `-NoOpen` | Print the path instead of opening it |
+
+## Save customer settings
+
+Keep the settings that stay the same from one meeting to the next in a simple
+config file:
+
+```text
+brand        = Delta
+domain       = delta.com
+logo         = ~/logos/delta.png
+min-score    = 50
+exclude-file = ~/known/delta-owned.csv
+rows         = 100
+```
+
+Then the next run is just the config flag; the script still prompts for the API
+key:
+
+```bash
+bash axur-report.sh --config delta.conf
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File axur-report.ps1 -Config delta.conf
+```
+
+Command-line flags override the file, wherever `--config` or `-Config` appears.
+Unknown keys produce a warning and are ignored. A missing config file stops the
+run with a clear message. The API key is never read from or written to a config
+file.
+
+To create the file from a successful command, add `--save-config delta.conf`
+(PowerShell: `-SaveConfig delta.conf`). It saves `brand`, `domain`, `logo`,
+`min-score`, `exclude-file`, and `rows`; run-control choices such as opening the
+report or making a PDF stay on the command line.
 
 ## Dropping rows you already know about
 

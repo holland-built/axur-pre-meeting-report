@@ -6,6 +6,8 @@
 #
 # Anything you leave off, it asks for.
 #
+#   --config FILE     read customer settings from FILE. Command-line flags win
+#   --save-config F   save this run's customer settings to F (never the API key)
 #   --rows N          rows to pull behind each number (default 50)
 #   --wait SECONDS    how long to let each search finish (default 300). A big
 #                     tenant needs longer; a count taken early is too low
@@ -27,10 +29,60 @@
 API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
 MINSCORE=""; EXCLUDE=""; EXCLUDEFILE=""; PAGECAP=40; WAIT=300
-LOGOSRC=""; NOLOGO=""; DROPOWN=""
+LOGOSRC=""; NOLOGO=""; DROPOWN=""; CONFIG=""; SAVECONFIG=""
+
+expand_user_path() {
+  case "$1" in
+    '~') printf '%s' "$HOME" ;;
+    '~/'*) printf '%s/%s' "$HOME" "${1#\~/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# Find and load the config before parsing the command line, so flags always win
+# regardless of where --config appears.
+find_config() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --config) CONFIG="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+}
+find_config "$@"
+
+if [ -n "$CONFIG" ]; then
+  CONFIG=$(expand_user_path "$CONFIG")
+  if [ ! -r "$CONFIG" ]; then
+    echo "Config file not found or not readable: $CONFIG" >&2; exit 1
+  fi
+  LINENO_CONFIG=0
+  while IFS= read -r LINE || [ -n "$LINE" ]; do
+    LINENO_CONFIG=$((LINENO_CONFIG+1))
+    LINE=$(printf '%s' "$LINE" | sed 's/\r$//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+    case "$LINE" in ''|'#'*) continue ;; esac
+    case "$LINE" in
+      *=*) ;;
+      *) echo "Warning: ignoring config line $LINENO_CONFIG without '=' in $CONFIG" >&2; continue ;;
+    esac
+    NAME=$(printf '%s' "${LINE%%=*}" | sed 's/[[:space:]]*$//')
+    VALUE=$(printf '%s' "${LINE#*=}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    case "$NAME" in
+      brand) BRAND="$VALUE" ;;
+      domain) DOMAIN="$VALUE" ;;
+      logo) LOGOSRC=$(expand_user_path "$VALUE") ;;
+      min-score) MINSCORE="$VALUE" ;;
+      exclude-file) EXCLUDEFILE=$(expand_user_path "$VALUE") ;;
+      rows) ROWS="$VALUE" ;;
+      *) echo "Warning: unknown config key '$NAME' in $CONFIG; ignoring it" >&2 ;;
+    esac
+  done < "$CONFIG"
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --config)     shift 2 ;;
+    --save-config) SAVECONFIG="$2"; shift 2 ;;
     --brand)      BRAND="$2"; shift 2 ;;
     --domain)     DOMAIN="$2"; shift 2 ;;
     --key)        KEY="$2"; shift 2 ;;
@@ -120,6 +172,21 @@ if [ -n "$MINSCORE" ]; then
   esac
 fi
 
+if [ -n "$SAVECONFIG" ]; then
+  SAVECONFIG=$(expand_user_path "$SAVECONFIG")
+  if ! {
+    printf 'brand        = %s\n' "$BRAND"
+    printf 'domain       = %s\n' "$DOMAIN"
+    printf 'logo         = %s\n' "$LOGOSRC"
+    printf 'min-score    = %s\n' "$MINSCORE"
+    printf 'exclude-file = %s\n' "$EXCLUDEFILE"
+    printf 'rows         = %s\n' "$ROWS"
+  } > "$SAVECONFIG"; then
+    echo "Could not write config file: $SAVECONFIG" >&2; exit 1
+  fi
+  echo "Saved config: $SAVECONFIG"
+fi
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 N=0
@@ -187,7 +254,9 @@ start_search() { # start_search NAME SOURCE QUERY
     CODE=$(printf '%s' "$RAW" | tail -n1); START=$(printf '%s' "$RAW" | sed '$d')
     # the gateway allows 30 calls a window, so wait it out rather than failing
     if [ "$CODE" = "429" ] && [ "$ATTEMPT" -lt 3 ]; then
-      ATTEMPT=$((ATTEMPT+1)); printf 'w'; sleep 25; continue
+      ATTEMPT=$((ATTEMPT+1))
+      echo "    rate limited; retrying $NAME after 25 seconds"
+      sleep 25; continue
     fi
     break
   done
@@ -207,14 +276,13 @@ start_search() { # start_search NAME SOURCE QUERY
     return
   fi
   printf '%s' "$ID" > "$TMP/$N.id"
-  printf '  started %s\n' "$NAME"
+  printf '  %-26s started\n' "$NAME"
 }
 
 collect_search() { # collect_search N
   N="$1"
   [ -f "$TMP/$N.failed" ] && return
   NAME=$(cat "$TMP/$N.name"); QUERY=$(cat "$TMP/$N.query"); ID=$(cat "$TMP/$N.id")
-  printf '%-26s' "$NAME"
   # Axur answers with a total long before it has finished searching: the reply
   # carries "running":true and a totalResults that is still climbing. Taking the
   # first number that appears reports a fraction of the real count as if it were
@@ -227,15 +295,14 @@ collect_search() { # collect_search N
     # BSD sed has no \| alternation, so a true/false pattern never matched
     # and every search waited out the whole timeout. Match the word instead.
     RUNNING=$(printf '%s' "$OUTJ" | sed -n 's/.*"running":\([a-z]*\).*/\1/p')
-    if [ "$RUNNING" = "false" ]; then printf '.'; break; fi
-    printf '.'
+    if [ "$RUNNING" = "false" ]; then break; fi
   done
   if [ -z "$TOTAL" ]; then
-    printf ' timed out\n'
+    printf '  %-26s timed out\n' "$NAME"
   elif [ "$RUNNING" = "false" ]; then
-    printf ' %s\n' "$TOTAL"
+    printf '  %-26s done: %s\n' "$NAME" "$TOTAL"
   else
-    printf ' at least %s (still searching after %ss)\n' "$TOTAL" "$WAIT"
+    printf '  %-26s at least %s (still searching after %ss)\n' "$NAME" "$TOTAL" "$WAIT"
     echo "$NAME" >> "$TMP/incomplete"
   fi
 
@@ -257,11 +324,11 @@ collect_search() { # collect_search N
           THISROW=$(printf '%s' "$PG" | cksum)
           [ "$THISROW" = "$FIRSTROW" ] && break
           printf '%s' "$PG" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g' > "$TMP/$N.page$P"
-          PAGES=$((PAGES+1)); printf '+'
+          PAGES=$((PAGES+1))
           P=$((P+1))
         done
         [ "$P" -gt "$PAGECAP" ] && PARTIAL=1
-        [ "$PAGES" -gt 1 ] && printf ' %s pages\n' "$PAGES"
+        [ "$PAGES" -gt 1 ] && printf '  %-26s pulled %s pages for filtering\n' "$NAME" "$PAGES"
       fi ;;
   esac
   [ -n "$PARTIAL" ] && echo "$NAME" >> "$TMP/partial"
@@ -278,7 +345,7 @@ collect_search() { # collect_search N
 }
 
 echo ""
-echo "Axur pre-meeting report: $BRAND ($DOMAIN)"
+echo "Searching for $BRAND ($DOMAIN)"
 echo "-------------------------------------------"
 start_search "Leaked credentials" credential  "emailDomain=\"$DOMAIN\""
 start_search "In plaintext"       credential  "emailDomain=\"$DOMAIN\" AND passwordType=\"PLAIN\""
@@ -394,15 +461,15 @@ if [ -n "$MINSCORE$EXCLUDE" ] && [ ! -x /usr/bin/perl ]; then
   exit 1
 fi
 if [ -n "$MINSCORE$EXCLUDE" ]; then
-  printf 'Applying filters   '
+  printf 'Applying filters... '
   for f in "$TMP"/*.json; do
     grep -q '"source":"signal-lake"\|signal-lake' "$f" 2>/dev/null || true
     case "$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$f" | head -1)" in
       "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
         B=$(basename "$f" .json)
         /usr/bin/perl "$TMP/filter.pl" "$MINSCORE" "$EXCLUDE" "$f" "$TMP/$B".page* 2>"$TMP/kept" > "$f.f"
-        if [ -s "$f.f" ]; then mv "$f.f" "$f"; printf '.'; else rm -f "$f.f"; printf 'x'; fi ;;
-      *) printf '-' ;;
+        if [ -s "$f.f" ]; then mv "$f.f" "$f"; else rm -f "$f.f"; fi ;;
+      *) : ;;
     esac
   done
   echo ' done'
@@ -466,12 +533,12 @@ print substr($s, 0, $begin), substr($s, $begin, $end_of_kept - $begin), substr($
 PERL
 
 if [ -x /usr/bin/perl ]; then
-  printf 'Trimming rows      '
+  printf 'Trimming rows... '
   for f in "$TMP"/*.json; do
     if /usr/bin/perl "$TMP/trim.pl" "$ROWS" "$f" > "$f.t" 2>/dev/null && [ -s "$f.t" ]; then
-      mv "$f.t" "$f"; printf '.'
+      mv "$f.t" "$f"
     else
-      rm -f "$f.t"; printf 'x'
+      rm -f "$f.t"
     fi
   done
   echo ' done'
@@ -1129,7 +1196,6 @@ echo ' done' >&2
 
 # full path, so nobody has to guess which folder they were standing in
 ABS="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
-echo "Wrote $ABS"
 
 # Chrome or Edge can print the report without opening a window
 CHROME=""
@@ -1141,7 +1207,7 @@ for C in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   [ -n "$C" ] && [ -x "$C" ] && CHROME="$C" && break
 done
 
-DONE=""
+DONE=""; PDF_WRITTEN=""
 if [ "$NOPDF" = "1" ]; then
   DONE="$ABS"
 elif [ -n "$CHROME" ]; then
@@ -1152,7 +1218,7 @@ elif [ -n "$CHROME" ]; then
             "file://$ABS" >/dev/null 2>&1
   if [ -s "$PDF" ]; then
     echo " ... wrote $PDF"
-    DONE="$PDF"
+    DONE="$PDF"; PDF_WRITTEN="$PDF"
   else
     echo " ... failed. Open the HTML and press Cmd+P."
     DONE="$ABS"
@@ -1161,6 +1227,21 @@ else
   echo "No Chrome or Edge found, so no PDF. Open the HTML and press Cmd+P."
   DONE="$ABS"
 fi
+
+echo ""
+echo "Summary"
+K=1
+while [ "$K" -le "$COUNT" ]; do
+  NAME=$(cat "$TMP/$K.name")
+  TOTAL=$(sed -n 's/^{"name":"[^"]*","query":".*","total":\([^,]*\),.*/\1/p' "$TMP/$K.json" | head -1)
+  [ -n "$TOTAL" ] || TOTAL="not available"
+  [ "$TOTAL" = "null" ] && TOTAL="not available"
+  printf '  %-26s %s\n' "$NAME" "$TOTAL"
+  K=$((K+1))
+done
+echo "Files written"
+echo "  HTML: $ABS"
+[ -n "$PDF_WRITTEN" ] && echo "  PDF:  $PDF_WRITTEN"
 
 # open it, so the run ends with the report on screen rather than a path to hunt for
 if [ "$NOOPEN" = "1" ]; then
