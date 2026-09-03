@@ -5,15 +5,17 @@ The report's HTML lives once, in axur-report.sh. This lifts it out, wraps it in
 the PowerShell below, and pushes both scripts back into guide.html so its
 download buttons never serve stale code.
 
-    python3 build.py
+    python3 tools/build.py
 
 Run it after editing anything in axur-report.sh.
 """
 import pathlib, sys
 
-SH   = pathlib.Path("axur-report.sh")
-PS1  = pathlib.Path("axur-report.ps1")
-PAGE = pathlib.Path("guide.html")
+# Paths are anchored to the repo root, so the builder runs from anywhere.
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SH   = ROOT / "axur-report.sh"
+PS1  = ROOT / "axur-report.ps1"
+PAGE = ROOT / "docs" / "guide.html"
 
 PS_TEMPLATE = r"""<#
   Axur pre-meeting report.
