@@ -11,6 +11,9 @@
     -Exclude LIST   drop rows matching these, comma separated. ".au,known.com"
     -ExcludeFile F  same, read from a file or CSV. One per line, first column,
                     # starts a comment
+    -Logo SRC       use this for the customer logo instead of looking it up.
+                    A file on disk, or a URL
+    -NoLogo         do not look up any logo. The names are written instead
     -Out FILE       output file (default axur-report-<domain>.html)
     -NoPdf          write only the HTML
     -NoOpen         do not open the report when it is done
@@ -22,7 +25,7 @@
 param(
   [string]$Brand, [string]$Domain, [string]$ApiKey,
   [int]$Rows = 50, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
-  [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
+  [string]$Logo, [switch]$NoLogo, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,14 +68,30 @@ function Get-Logo($url) {
     return "data:$(($ct -split ';')[0]);base64,$([Convert]::ToBase64String($r.Content))"
   } catch { return "" }
 }
-Write-Host -NoNewline "Logo"
-$logo = Get-Logo "https://cdn.brandfetch.io/$Domain/w/400/h/400"
-$ours = Get-Logo "https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
-if ($logo) { Write-Host " ... got $Brand" } else {
-  Write-Host " ... none for $Domain, the name will be written instead"
-  $logo = "https://cdn.brandfetch.io/$Domain/w/400/h/400"
+# -Logo takes a file as readily as a URL, because an SE who has the customer's
+# logo to hand should not have to put it on the web to use it.
+function Read-Logo($path) {
+  if (-not (Test-Path -LiteralPath $path)) { return "" }
+  $ext = [IO.Path]::GetExtension($path).ToLower()
+  $type = @{ ".png"="image/png"; ".jpg"="image/jpeg"; ".jpeg"="image/jpeg";
+             ".gif"="image/gif"; ".webp"="image/webp"; ".svg"="image/svg+xml" }[$ext]
+  if (-not $type) { Write-Host "  $path is not an image I know ($ext), ignoring it"; return "" }
+  return "data:$type;base64," + [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
 }
-if (-not $ours) { $ours = "https://cdn.brandfetch.io/infoblox.com/w/400/h/400" }
+
+Write-Host -NoNewline "Logo"
+$logo = ""; $ours = ""
+if ($NoLogo) {
+  Write-Host " ... skipped, the names will be written instead"
+} else {
+  if ($Logo -and (Test-Path -LiteralPath $Logo)) { $logo = Read-Logo $Logo }
+  elseif ($Logo)                                 { $logo = Get-Logo $Logo }
+  else { $logo = Get-Logo "https://cdn.brandfetch.io/$Domain/w/400/h/400" }
+  $ours = Get-Logo "https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
+  if ($logo) { Write-Host " ... got $Brand" }
+  elseif ($Logo) { Write-Host " ... could not read $Logo, the name will be written instead" }
+  else { Write-Host " ... none for $Domain, the name will be written instead" }
+}
 
 $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
 $patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ })

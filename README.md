@@ -41,6 +41,8 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 | `--min-score N` | `-MinScore` | Drop rows scoring below N |
 | `--exclude LIST` | `-Exclude` | Drop rows matching these, comma separated. Repeatable |
 | `--exclude-file F` | `-ExcludeFile` | Same, read from a file or CSV |
+| `--logo SRC` | `-Logo` | Use this image instead of looking one up. A file or a URL |
+| `--no-logo` | `-NoLogo` | Look up nothing. The names are written instead |
 | `--out FILE` | `-Out` | Output file |
 | `--no-pdf` | `-NoPdf` | Write the HTML only |
 | `--no-open` | `-NoOpen` | Print the path instead of opening it |
@@ -80,6 +82,18 @@ page cap it says so, and that count came from a partial pull.
 Filters only touch the three domain searches. A leaked credential has no score
 and no domain to exclude on.
 
+## Logos
+
+The cover looks the customer's logo up by domain. When that finds nothing, or
+finds the wrong thing, hand it one:
+
+```bash
+bash axur-report.sh --domain customer.com --logo ~/Desktop/customer-logo.png
+```
+
+It takes a URL just as happily, and `--no-logo` skips the lookup altogether and
+writes the company names instead.
+
 ## What you get
 
 A summary page, the records behind each number, and a PDF. It opens when it is
@@ -94,8 +108,8 @@ brand containing the word, so Delta returns Delta Cafés.
 |---|---|
 | `axur-report.sh` | The Mac script |
 | `axur-report.ps1` | The Windows script. Generated, do not edit by hand |
-| `docs/index.html` | The SE guide, with both scripts embedded in its download buttons |
-| `docs/hosting.md` | How to host the guide |
+| `docs/guide.html` | The SE guide, with both scripts embedded in its download buttons |
+| `docs/DEPLOY.md` | How to host the guide |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
 The report's HTML lives once, in `axur-report.sh`. After editing it, run both

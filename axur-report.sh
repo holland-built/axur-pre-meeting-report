@@ -12,6 +12,9 @@
 #                     repeatable, so several --exclude add up
 #   --exclude-file F  same, read from a file or CSV. One per line, first column,
 #                     # starts a comment
+#   --logo SRC        use this for the customer logo instead of looking it up.
+#                     A file on disk, or a URL
+#   --no-logo         do not look up any logo. The names are written instead
 #   --out FILE        output file (default axur-report-<domain>.html)
 #   --no-pdf          write only the HTML
 #   --no-open         do not open the report when it is done
@@ -20,6 +23,7 @@
 API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
 MINSCORE=""; EXCLUDE=""; EXCLUDEFILE=""; PAGECAP=40
+LOGOSRC=""; NOLOGO=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,11 +35,13 @@ while [ $# -gt 0 ]; do
     --exclude)    EXCLUDE="${EXCLUDE:+$EXCLUDE,}$2"; shift 2 ;;
     --exclude-file) EXCLUDEFILE="$2"; shift 2 ;;
     --brandfetch) BFID="$2"; shift 2 ;;
+    --logo)       LOGOSRC="$2"; shift 2 ;;
+    --no-logo)    NOLOGO=1; shift ;;
     --out)        OUT="$2"; shift 2 ;;
     --debug)      DEBUG=1; shift ;;
     --no-pdf)     NOPDF=1; shift ;;
     --no-open)    NOOPEN=1; shift ;;
-    -h|--help)    sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,21p' "$0"; exit 0 ;;
     *)            echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -106,12 +112,37 @@ fetch_logo() { # fetch_logo URL FILE  -> prints a data URI, or nothing
     image/*) [ -s "$2" ] && printf 'data:%s;base64,%s' "${CT%%;*}" "$(base64 < "$2" | tr -d '\n')" ;;
   esac
 }
+# --logo takes a file as readily as a URL, because an SE who has the customer's
+# logo to hand should not have to put it on the web to use it.
+read_logo() { # read_logo PATH -> prints a data URI, or nothing
+  [ -r "$1" ] || return
+  CT=$(file --mime-type -b "$1" 2>/dev/null)
+  case "$CT" in
+    image/*) printf 'data:%s;base64,%s' "$CT" "$(base64 < "$1" | tr -d '\n')" ;;
+    *) echo "  $1 is not an image ($CT), ignoring it" >&2 ;;
+  esac
+}
+
 printf 'Logo'
-LOGO_DATA=$(fetch_logo "$LOGO" "$TMP/logo.bin")
-OURS_DATA=$(fetch_logo "$OURS" "$TMP/ours.bin")
+if [ -n "$NOLOGO" ]; then
+  echo ' ... skipped, the names will be written instead'
+  LOGO_DATA=""; OURS_DATA=""
+else
+  if [ -n "$LOGOSRC" ] && [ -e "$LOGOSRC" ]; then
+    LOGO_DATA=$(read_logo "$LOGOSRC")
+  elif [ -n "$LOGOSRC" ]; then
+    LOGO_DATA=$(fetch_logo "$LOGOSRC" "$TMP/logo.bin")
+  else
+    LOGO_DATA=$(fetch_logo "$LOGO" "$TMP/logo.bin")
+  fi
+  OURS_DATA=$(fetch_logo "$OURS" "$TMP/ours.bin")
+fi
 [ -n "$LOGO_DATA" ] && LOGO="$LOGO_DATA"
 [ -n "$OURS_DATA" ] && OURS="$OURS_DATA"
-if [ -n "$LOGO_DATA" ]; then echo " ... got $BRAND"; else echo " ... none for $DOMAIN, the name will be written instead"; fi
+if [ -n "$NOLOGO" ]; then :
+elif [ -n "$LOGO_DATA" ]; then echo " ... got $BRAND"
+elif [ -n "$LOGOSRC" ]; then echo " ... could not read $LOGOSRC, the name will be written instead"
+else echo " ... none for $DOMAIN, the name will be written instead"; fi
 
 run() { # run NAME SOURCE QUERY
   NAME="$1"; SOURCE="$2"; QUERY="$3"; N=$((N+1))
