@@ -7,6 +7,8 @@
 # Anything you leave off, it asks for.
 #
 #   --rows N          rows to pull behind each number (default 50)
+#   --min-score N     drop rows scoring below N (lookalike and phishing only)
+#   --exclude LIST    drop rows matching these, comma separated. ".au,known.com"
 #   --out FILE        output file (default axur-report-<domain>.html)
 #   --no-pdf          write only the HTML
 #   --no-open         do not open the report when it is done
@@ -14,6 +16,7 @@
 
 API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
+MINSCORE=""; EXCLUDE=""; PAGECAP=40
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -21,12 +24,14 @@ while [ $# -gt 0 ]; do
     --domain)     DOMAIN="$2"; shift 2 ;;
     --key)        KEY="$2"; shift 2 ;;
     --rows)       ROWS="$2"; shift 2 ;;
+    --min-score)  MINSCORE="$2"; shift 2 ;;
+    --exclude)    EXCLUDE="$2"; shift 2 ;;
     --brandfetch) BFID="$2"; shift 2 ;;
     --out)        OUT="$2"; shift 2 ;;
     --debug)      DEBUG=1; shift ;;
     --no-pdf)     NOPDF=1; shift ;;
     --no-open)    NOOPEN=1; shift ;;
-    -h|--help)    sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
     *)            echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -123,6 +128,32 @@ run() { # run NAME SOURCE QUERY
     [ -n "$TOTAL" ] && break
   done
   if [ -n "$TOTAL" ]; then printf ' %s\n' "$TOTAL"; else printf ' timed out\n'; fi
+
+  # A filtered number is only honest if it was counted over every row, so when
+  # a filter is on we walk the pages instead of reading the first one. The API
+  # ignores page-size parameters, so page= is the only lever there is. If it
+  # hands back the same first row twice, paging is not supported: we stop and
+  # the report says the count came from a partial pull.
+  PAGES=1; PARTIAL=""
+  case "$NAME" in
+    "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
+      if [ -n "$MINSCORE$EXCLUDE" ] && [ -n "$TOTAL" ]; then
+        FIRSTROW=$(printf '%s' "$OUTJ" | sed -n 's/.*"data":\[[^{]*{\([^}]\{0,120\}\).*/\1/p')
+        P=2
+        while [ "$P" -le "$PAGECAP" ]; do
+          PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "Authorization: Bearer $KEY")
+          printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' || break
+          THISROW=$(printf '%s' "$PG" | sed -n 's/.*"data":\[[^{]*{\([^}]\{0,120\}\).*/\1/p')
+          [ "$THISROW" = "$FIRSTROW" ] && break
+          printf '%s' "$PG" | sed 's#</#<\\/#g; s/"password":"[^"]*"/"password":"[removed]"/g' > "$TMP/$N.page$P"
+          PAGES=$((PAGES+1)); printf '+'
+          P=$((P+1))
+        done
+        [ "$P" -gt "$PAGECAP" ] && PARTIAL=1
+        [ "$PAGES" -gt 1 ] && printf ' %s pages\n' "$PAGES"
+      fi ;;
+  esac
+  [ -n "$PARTIAL" ] && echo "$NAME" >> "$TMP/partial"
   # splice the reply into the report and let the browser parse it
   {
     printf '{"name":"%s","query":"%s","total":%s,"reply":' \
@@ -142,6 +173,90 @@ run "Phishing pages"     signal-lake "impersonatedBrandsHigh=\"$BRAND\""
 run "Lookalike domains"  signal-lake "sanitizedDomainLabel=$LABEL~1"
 run "Mail-enabled lookalikes" signal-lake "domainLabel=$LABEL~1 AND dnsRecordMX=*"
 echo "-------------------------------------------"
+
+# ---------- exclusions ----------
+# --min-score and --exclude only ever touch the three signal-lake searches:
+# a leaked credential has no score and no domain to exclude on. When a filter
+# runs, the headline number is recounted from the rows that survive it, so the
+# count and the table below it always agree.
+cat > "$TMP/filter.pl" <<'PERL'
+use strict; use warnings;
+my ($min, $ex, $file, @more) = @ARGV;
+my @pats = grep { length } split /\s*,\s*/, ($ex // '');
+open my $fh, '<', $file or die; my $s = do { local $/; <$fh> };
+
+# The rows sit in the first "data":[ ... ] array. Walk it object by object,
+# string and escape aware, so a brace inside a value cannot fool the depth count.
+my $i = index($s, '"data"'); exit 1 if $i < 0;
+$i = index($s, '[', $i); exit 1 if $i < 0;
+my $begin = $i + 1;
+my (@rows, $depth, $start, $instr, $esc); $depth = 0; $instr = 0; $esc = 0;
+for (my $p = $begin; $p < length($s); $p++) {
+  my $c = substr($s, $p, 1);
+  if ($instr) { if ($esc) { $esc = 0 } elsif ($c eq '\\') { $esc = 1 } elsif ($c eq '"') { $instr = 0 } next }
+  if ($c eq '"') { $instr = 1; next }
+  if ($c eq '{') { $start = $p unless $depth; $depth++; next }
+  if ($c eq '}') { $depth--; push @rows, substr($s, $start, $p - $start + 1) unless $depth; next }
+  last if $c eq ']' && !$depth;
+}
+my $end = index($s, ']', $begin);
+# rows from the later pages, pulled in so the recount covers the whole result
+for my $extra (@more) {
+  open my $eh, '<', $extra or next; my $e = do { local $/; <$eh> };
+  my $j = index($e, '"data"'); next if $j < 0;
+  $j = index($e, '[', $j); next if $j < 0;
+  my ($d, $st, $ins, $es) = (0, undef, 0, 0);
+  for (my $q = $j + 1; $q < length($e); $q++) {
+    my $c = substr($e, $q, 1);
+    if ($ins) { if ($es) { $es = 0 } elsif ($c eq '\\') { $es = 1 } elsif ($c eq '"') { $ins = 0 } next }
+    if ($c eq '"') { $ins = 1; next }
+    if ($c eq '{') { $st = $q unless $d; $d++; next }
+    if ($c eq '}') { $d--; push @rows, substr($e, $st, $q - $st + 1) unless $d; next }
+    last if $c eq ']' && !$d;
+  }
+}
+exit 1 unless @rows;
+
+my @keep;
+ROW: for my $r (@rows) {
+  if (defined $min && length $min) {
+    my ($sc) = $r =~ /"riskScore"\s*:\s*"?([0-9.]+)"?/;
+    next ROW if defined $sc && $sc + 0 < $min + 0;
+  }
+  for my $pat (@pats) {
+    my $q = quotemeta $pat;
+    # match the pattern anywhere in the domain or url fields only
+    for my $f (qw(domain url sourceUrl accessHost)) {
+      my ($v) = $r =~ /"$f"\s*:\s*"([^"]*)"/;
+      next unless defined $v;
+      next ROW if $v =~ /$q/i;
+    }
+  }
+  push @keep, $r;
+}
+
+my $kept = scalar @keep;
+my $out = substr($s, 0, $begin) . join(',', @keep) . substr($s, $end);
+# the headline number is the recount, so the tile and the table agree
+$out =~ s/^(\{"name":"[^"]*","query":".*?","total":)[^,]*/$1$kept/s;
+print $out;
+print STDERR "$kept\n";
+PERL
+
+if [ -n "$MINSCORE$EXCLUDE" ] && [ -x /usr/bin/perl ]; then
+  printf 'Applying filters   '
+  for f in "$TMP"/*.json; do
+    grep -q '"source":"signal-lake"\|signal-lake' "$f" 2>/dev/null || true
+    case "$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$f" | head -1)" in
+      "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
+        B=$(basename "$f" .json)
+        /usr/bin/perl "$TMP/filter.pl" "$MINSCORE" "$EXCLUDE" "$f" "$TMP/$B".page* 2>"$TMP/kept" > "$f.f"
+        if [ -s "$f.f" ]; then mv "$f.f" "$f"; printf '.'; else rm -f "$f.f"; printf 'x'; fi ;;
+      *) printf '-' ;;
+    esac
+  done
+  echo ' done'
+fi
 
 # ---------- cut the replies down to the rows the report shows ----------
 # The API hands back a whole page and ignores every page-size parameter, so the
