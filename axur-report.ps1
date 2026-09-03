@@ -193,8 +193,14 @@ function Invoke-Search($name, $source, $query) {
   } else { Write-Host "" }
 
   # never let a leaked password reach the report file
+  # Any field whose NAME carries password or hash goes, whatever its type: the
+  # hashes, the length and the passwordHas* flags together are a recipe for
+  # guessing the password this report says it does not include. passwordType is
+  # kept, because PLAIN vs HASH is the point of one of the five searches.
   foreach ($r in $rows) {
-    foreach ($f in @('password', 'hash')) { if ($null -ne $r.$f) { $r.$f = '[removed]' } }
+    foreach ($n in @($r.PSObject.Properties.Name)) {
+      if ($n -ne 'passwordType' -and $n -match '(?i)password|hash') { $r.$n = '[removed]' }
+    }
   }
   $keep = @($rows | Select-Object -First $Rows)
   $reply = @{ result = @{ status = @{ totalResults = $total }; data = $keep } }
@@ -208,11 +214,11 @@ Write-Host ""
 Write-Host "Axur pre-meeting report: $Brand"
 Write-Host "-------------------------------------------"
 $results = @(
-  (Invoke-Search "Leaked credentials"       "credential"  "emailDomain=`"$Domain`""),
-  (Invoke-Search "In plaintext"             "credential"  "emailDomain=`"$Domain`" AND passwordType=`"PLAIN`""),
-  (Invoke-Search "Phishing pages"           "signal-lake" "impersonatedBrandsHigh=`"$Brand`""),
-  (Invoke-Search "Lookalike domains"        "signal-lake" "sanitizedDomainLabel=$label~1"),
-  (Invoke-Search "Mail-enabled lookalikes"  "signal-lake" "domainLabel=$label~1 AND dnsRecordMX=*")
+  (Invoke-Search "Leaked credentials"         "credential"  "emailDomain=`"$Domain`""),
+  (Invoke-Search "In plaintext"               "credential"  "emailDomain=`"$Domain`" AND passwordType=`"PLAIN`""),
+  (Invoke-Search "Phishing pages"             "signal-lake" "impersonatedBrandsHigh=`"$Brand`""),
+  (Invoke-Search "Lookalike domains"          "signal-lake" "sanitizedDomainLabel=$label~1"),
+  (Invoke-Search "Mail-enabled lookalikes"    "signal-lake" "sanitizedDomainLabel=$label~1 AND dnsRecordMX=*")
 )
 Write-Host "-------------------------------------------"
 

@@ -9,7 +9,7 @@ download buttons never serve stale code.
 
 Run it after editing anything in axur-report.sh.
 """
-import pathlib, sys
+import pathlib, re, sys
 
 # Paths are anchored to the repo root, so the builder runs from anywhere.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -212,8 +212,14 @@ function Invoke-Search($name, $source, $query) {
   } else { Write-Host "" }
 
   # never let a leaked password reach the report file
+  # Any field whose NAME carries password or hash goes, whatever its type: the
+  # hashes, the length and the passwordHas* flags together are a recipe for
+  # guessing the password this report says it does not include. passwordType is
+  # kept, because PLAIN vs HASH is the point of one of the five searches.
   foreach ($r in $rows) {
-    foreach ($f in @('password', 'hash')) { if ($null -ne $r.$f) { $r.$f = '[removed]' } }
+    foreach ($n in @($r.PSObject.Properties.Name)) {
+      if ($n -ne 'passwordType' -and $n -match '(?i)password|hash') { $r.$n = '[removed]' }
+    }
   }
   $keep = @($rows | Select-Object -First $Rows)
   $reply = @{ result = @{ status = @{ totalResults = $total }; data = $keep } }
@@ -226,13 +232,7 @@ function Invoke-Search($name, $source, $query) {
 Write-Host ""
 Write-Host "Axur pre-meeting report: $Brand"
 Write-Host "-------------------------------------------"
-$results = @(
-  (Invoke-Search "Leaked credentials"       "credential"  "emailDomain=`"$Domain`""),
-  (Invoke-Search "In plaintext"             "credential"  "emailDomain=`"$Domain`" AND passwordType=`"PLAIN`""),
-  (Invoke-Search "Phishing pages"           "signal-lake" "impersonatedBrandsHigh=`"$Brand`""),
-  (Invoke-Search "Lookalike domains"        "signal-lake" "sanitizedDomainLabel=$label~1"),
-  (Invoke-Search "Mail-enabled lookalikes"  "signal-lake" "domainLabel=$label~1 AND dnsRecordMX=*")
-)
+###SEARCHES###
 Write-Host "-------------------------------------------"
 
 $head = @'
@@ -310,6 +310,28 @@ def heredoc(lines, open_marker, close_marker):
     return "\n".join(lines[i + 1:j])
 
 
+
+def powershell_searches(sh_text):
+    """The five searches, taken from the shell script so they cannot drift.
+
+    They used to be hand-copied into the PowerShell template, and a fix to the
+    lookalike query reached the Mac script only: Windows kept reporting a
+    subset larger than its parent.
+    """
+    calls = []
+    for m in re.finditer(r'^run\s+"([^"]+)"\s+(\S+)\s+"(.*)"\s*$', sh_text, re.M):
+        name, source, query = m.group(1), m.group(2), m.group(3)
+        q = (query.replace('\\"', '`"')          # shell escape -> PowerShell escape
+                  .replace("$DOMAIN", "$Domain")
+                  .replace("$BRAND", "$Brand")
+                  .replace("$LABEL", "$label"))
+        calls.append('  (Invoke-Search %s %s "%s")'
+                     % (('"%s"' % name).ljust(28), ('"%s"' % source).ljust(13), q))
+    if len(calls) != 5:
+        sys.exit("expected 5 searches in axur-report.sh, found %d" % len(calls))
+    return "$results = @(\n" + ",\n".join(calls) + "\n)"
+
+
 def build_powershell(sh_text):
     lines = sh_text.split("\n")
     head = heredoc(lines, "cat <<HTMLHEAD", "HTMLHEAD")
@@ -337,7 +359,9 @@ def build_powershell(sh_text):
                 sys.exit("%s has a line starting with %s, which would close a "
                          "PowerShell here-string" % (name, bad))
 
-    ps = PS_TEMPLATE.replace("###HTMLHEAD###", head).replace("###HTMLTAIL###", tail)
+    ps = (PS_TEMPLATE.replace("###HTMLHEAD###", head)
+                     .replace("###HTMLTAIL###", tail)
+                     .replace("###SEARCHES###", powershell_searches(sh_text)))
     # Windows tooling is happier with CRLF
     PS1.write_bytes(ps.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
     return ps.count("\n") + 1

@@ -198,7 +198,7 @@ run() { # run NAME SOURCE QUERY
           printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' || break
           THISROW=$(printf '%s' "$PG" | sed -n 's/.*"data":\[[^{]*{\([^}]\{0,120\}\).*/\1/p')
           [ "$THISROW" = "$FIRSTROW" ] && break
-          printf '%s' "$PG" | sed -E 's#</#<\\/#g; s/"(password|hash)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"/"\1":"[removed]"/g' > "$TMP/$N.page$P"
+          printf '%s' "$PG" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g' > "$TMP/$N.page$P"
           PAGES=$((PAGES+1)); printf '+'
           P=$((P+1))
         done
@@ -214,7 +214,7 @@ run() { # run NAME SOURCE QUERY
     # Strip the password before it reaches the report file. The pattern allows
     # space around the colon and escaped quotes inside the value: without both,
     # "password": "secret" slipped through untouched.
-    printf '%s' "${OUTJ:-null}" | sed -E 's#</#<\\/#g; s/"(password|hash)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"/"\1":"[removed]"/g'
+    printf '%s' "${OUTJ:-null}" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g'
     printf '}'
   } > "$TMP/$N.json"
 }
