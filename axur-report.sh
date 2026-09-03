@@ -970,7 +970,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   function sectionOf(name){ for (var i = 0; i < totals.length; i++) { if (totals[i].name === name) return i + 1; } return 0; }
   var CARDS = [
     { icon:'lock', title:'Exposed credentials', go:sectionOf('Leaked credentials'),
-      big:n('Leaked credentials'), lab:'work accounts whose password has leaked', sev:'a',
+      big:n('Leaked credentials'), lab:'leaked records tied to your domain. One account can appear more than once', sev:'a',
       sub:n('In plaintext'), subLab:'of them with the password in readable form, usable today', subSev:'r',
       desc:'Accounts on ' + esc(DOMAIN) + ' whose passwords have already been exposed somewhere outside your company.',
       why:'They come from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware.' },

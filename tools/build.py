@@ -78,7 +78,7 @@ $headers = @{ Authorization = "Bearer $ApiKey" }
 # a data URI means it survives the PDF, an offline mailbox, and blocked images.
 function Get-Logo($url) {
   try {
-    $r = Invoke-WebRequest -Uri $url -Headers @{
+    $r = Invoke-WebRequest -UseBasicParsing -Uri $url -Headers @{
       Referer = "https://one.axur.com/"
       "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
     } -TimeoutSec 12
@@ -99,15 +99,17 @@ function Read-Logo($path) {
 }
 
 Write-Host -NoNewline "Logo"
-$logo = ""; $ours = ""
+# PowerShell variable names are case-insensitive, so a local named $logo would
+# erase the $Logo parameter before anything reads it.
+$custData = ""; $oursData = ""
 if ($NoLogo) {
   Write-Host " ... skipped, the names will be written instead"
 } else {
-  if ($Logo -and (Test-Path -LiteralPath $Logo)) { $logo = Read-Logo $Logo }
-  elseif ($Logo)                                 { $logo = Get-Logo $Logo }
-  else { $logo = Get-Logo "https://cdn.brandfetch.io/$Domain/w/400/h/400" }
-  $ours = Get-Logo "https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
-  if ($logo) { Write-Host " ... got $Brand" }
+  if ($Logo -and (Test-Path -LiteralPath $Logo)) { $custData = Read-Logo $Logo }
+  elseif ($Logo)                                 { $custData = Get-Logo $Logo }
+  else { $custData = Get-Logo "https://cdn.brandfetch.io/$Domain/w/400/h/400" }
+  $oursData = Get-Logo "https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
+  if ($custData) { Write-Host " ... got $Brand" }
   elseif ($Logo) { Write-Host " ... could not read $Logo, the name will be written instead" }
   else { Write-Host " ... none for $Domain, the name will be written instead" }
 }
@@ -135,7 +137,11 @@ $partial = @()
 function Test-Keep($row) {
   if ($MinScore) {
     $sc = $row.riskScore
-    if ($null -ne $sc -and [double]$sc -lt [double]$MinScore) { return $false }
+    # a score of "N/A", or an object, must not take the report down
+    $n = 0.0
+    if ($null -ne $sc -and [double]::TryParse([string]$sc, [ref]$n)) {
+      if ($n -lt [double]$MinScore) { return $false }
+    }
   }
   foreach ($p in $patterns) {
     foreach ($f in @('domain', 'url', 'sourceUrl', 'accessHost')) {
@@ -173,7 +179,7 @@ function Invoke-Search($name, $source, $query) {
   $total = $null; $raw = $null
   for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Seconds 2; Write-Host -NoNewline "."
-    try { $r = Invoke-WebRequest -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
+    try { $r = Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
     $raw = $r.Content
     $o = $raw | ConvertFrom-Json
     $total = $o.result.status.totalResults
@@ -192,7 +198,7 @@ function Invoke-Search($name, $source, $query) {
     $firstKey = if ($rows.Count) { ($rows[0] | ConvertTo-Json -Compress) } else { "" }
     $p = 2
     while ($p -le $PageCap) {
-      try { $pg = (Invoke-WebRequest -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content }
+      try { $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content }
       catch { break }
       $pd = $pg | ConvertFrom-Json
       $pr = @($pd.result.data)
@@ -244,7 +250,7 @@ $tail = @'
 
 $now = Get-Date
 $head = $head.Replace('{{BRAND}}', $Brand).Replace('{{DOMAIN}}', $Domain).
-              Replace('{{LOGO}}', $logo).Replace('{{OURS}}', $ours).
+              Replace('{{LOGO}}', $custData).Replace('{{OURS}}', $oursData).
               Replace('{{DATE_ISO}}',   $now.ToString('yyyy-MM-dd')).
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
               Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy'))
