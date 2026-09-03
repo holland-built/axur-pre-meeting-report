@@ -1,4 +1,21 @@
-<#
+#!/usr/bin/env python3
+"""Rebuild the Windows script and the guide's download buttons.
+
+The report's HTML lives once, in axur-report.sh. This lifts it out, wraps it in
+the PowerShell below, and pushes both scripts back into guide.html so its
+download buttons never serve stale code.
+
+    python3 build.py
+
+Run it after editing anything in axur-report.sh.
+"""
+import pathlib, sys
+
+SH   = pathlib.Path("axur-report.sh")
+PS1  = pathlib.Path("axur-report.ps1")
+PAGE = pathlib.Path("guide.html")
+
+PS_TEMPLATE = r"""<#
   Axur pre-meeting report.
 
     powershell -ExecutionPolicy Bypass -File axur-report.ps1
@@ -258,3 +275,68 @@ if (-not $NoPdf) {
 
 if ($NoOpen) { Write-Host "Open it with:  Invoke-Item `"$done`"" } else { Invoke-Item $done }
 Write-Host ""
+"""
+
+
+def heredoc(lines, open_marker, close_marker):
+    """The text between a heredoc's markers in the shell script."""
+    i = next(k for k, l in enumerate(lines) if l.startswith(open_marker))
+    j = next(k for k in range(i + 1, len(lines)) if lines[k] == close_marker)
+    return "\n".join(lines[i + 1:j])
+
+
+def build_powershell(sh_text):
+    lines = sh_text.split("\n")
+    head = heredoc(lines, "cat <<HTMLHEAD", "HTMLHEAD")
+    tail = heredoc(lines, "cat <<'HTMLTAIL'", "HTMLTAIL")
+
+    # the shell interpolates these; PowerShell will .Replace() them instead
+    for var, ph in (("BRAND", "{{BRAND}}"), ("DOMAIN", "{{DOMAIN}}"),
+                    ("LOGO", "{{LOGO}}"), ("OURS", "{{OURS}}")):
+        head = head.replace("${%s}" % var, ph).replace("$" + var, ph)
+
+    for name, text in (("HTMLHEAD", head), ("HTMLTAIL", tail)):
+        for bad in ("'@", '"@'):
+            if any(l.strip().startswith(bad) for l in text.split("\n")):
+                sys.exit("%s has a line starting with %s, which would close a "
+                         "PowerShell here-string" % (name, bad))
+
+    ps = PS_TEMPLATE.replace("###HTMLHEAD###", head).replace("###HTMLTAIL###", tail)
+    # Windows tooling is happier with CRLF
+    PS1.write_bytes(ps.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    return ps.count("\n") + 1
+
+
+def quote(line):
+    return "      '" + (line.replace("\\", "\\\\").replace("'", "\\'")
+                            .replace("</", "<\\/")) + "',"
+
+
+def embed(page, start_marker, lines):
+    if page.count(start_marker) != 1:
+        sys.exit("marker %r is not unique; guide.html has drifted" % start_marker)
+    i = page.index(start_marker)
+    j = i
+    while not page[j:].lstrip().startswith("].join("):
+        j = page.index("\n", j) + 1
+    body = "\n".join(quote(l) for l in lines)
+    return page[:i + len(start_marker)] + "\n" + body + "\n    " + page[j:].lstrip()
+
+
+def main():
+    sh_text = SH.read_text()
+    print("axur-report.ps1: %d lines" % build_powershell(sh_text))
+
+    page = PAGE.read_text()
+    for path, marker in ((SH, "    var sh = ["), (PS1, "    var ps = [")):
+        text = path.read_text().replace("\r\n", "\n")
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        page = embed(page, marker, lines)
+        print("embedded %s: %d lines" % (path.name, len(lines)))
+    PAGE.write_text(page)
+
+
+if __name__ == "__main__":
+    main()

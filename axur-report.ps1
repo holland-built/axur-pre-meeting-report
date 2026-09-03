@@ -206,6 +206,7 @@ $head = @'
 <style>
  :root{
    --ink:#171717;--body:#4d4d4d;--mute:#6a7078;--faint:#9aa1a8;--line:#e6e8ea;--soft:#fafafa;
+   --stripe:#eef1f4;--rowline:#dfe3e7;
    --dark:#23282d;--darker:#15181b;--tile:#1b1f23;--card:#e9ebec;
    --green:#12d15f;--teal:#39d3c3;--amber:#f5c518;--red:#ff5a52;
  }
@@ -300,17 +301,19 @@ $head = @'
  section h3{font-size:16px;font-weight:600;margin:0 0 2px;letter-spacing:-.2px}
  .q{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--body);
     margin:0 0 10px;word-break:break-all}
- table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
+ /* auto layout, so a risk score gets the width of a risk score and a domain
+    gets the width of a domain, rather than every column taking an equal share. */
+ table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
  th{text-align:left;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.09em;
     text-transform:uppercase;color:var(--mute);font-weight:500;padding:7px 8px;
     border-bottom:1.5px solid var(--ink);background:var(--soft);height:34px;box-sizing:border-box}
- /* One line per row on screen, so the space reserved for a table is the space it takes.
-    Print undoes this, because a customer reading the PDF needs the whole value. */
- td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle;
-    height:34px;box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
- td:hover{overflow:visible;white-space:normal;word-break:break-word;position:relative;
-          background:#fffbe6;z-index:1}
- tbody tr:nth-child(even) td{background:var(--soft)}
+ /* Values are shown whole. A truncated domain is worse than a taller row,
+    because the reader cannot tell which domain it was. */
+ td{padding:9px 12px;border-bottom:1px solid var(--rowline);vertical-align:middle;
+    box-sizing:border-box;white-space:normal;word-break:break-word}
+ td:first-child{font-weight:500;color:var(--ink)}
+ tbody tr:nth-child(even){background:var(--stripe)}
+ tbody tr:hover{background:#fffbe6}
  .more{font-size:12.5px;color:var(--mute);margin-top:7px}
  .warn{margin-top:26px;background:#fff5f5;border:1px solid #f7d4d6;border-radius:8px;
         padding:13px 16px;font-size:12.5px;line-height:1.5;color:var(--body);
@@ -347,6 +350,7 @@ $head = @'
    /* the reservation is a screen device; on paper the rows set their own height */
    .rowbox{min-height:0!important}
    td{white-space:normal;word-break:break-word;height:auto;vertical-align:top}
+   #totop{display:none!important}
  }
 </style></head><body>
 <main>

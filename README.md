@@ -95,12 +95,11 @@ brand containing the word, so Delta returns Delta Cafés.
 | `axur-report.sh` | The Mac script |
 | `axur-report.ps1` | The Windows script. Generated, do not edit by hand |
 | `guide.html` | The SE guide, with both scripts embedded in its download buttons |
-| `build-ps1.py` | Rebuilds the PowerShell from the shell script's HTML |
-| `embed-scripts.py` | Pushes both scripts back into `guide.html` |
+| `build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
 The report's HTML lives once, in `axur-report.sh`. After editing it, run both
 generators or the other copies serve stale code:
 
 ```bash
-python3 build-ps1.py && python3 embed-scripts.py
+python3 build.py
 ```
