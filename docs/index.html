@@ -283,20 +283,33 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
           <button class="copy" data-cmd="cmd-win">Copy</button></div>
       </li>
     </ol>
-    <p class="note">Skip the questions with any of these. macOS only.</p>
+    <p class="note">Skip the questions with any of these. Windows takes the same ones as
+      <code>-Brand</code>, <code>-Domain</code>, <code>-Config</code> and so on.</p>
     <dl class="flags">
       <dt>--brand "BRAND"</dt><dd>brand, as Axur spells it. Quote it only if it has a space</dd>
       <dt>--domain customer.com</dt><dd>customer domain</dd>
-      <dt>--key YOUR_API_KEY</dt><dd>your API key</dd>
+      <dt>--key YOUR_API_KEY</dt><dd>your API key. Never saved to a file</dd>
+      <dt>--save-config customer.conf</dt><dd>write this run's settings to a file, so next time is one flag</dd>
+      <dt>--config customer.conf</dt><dd>read them back. Any flag you add still wins</dd>
+      <dt>--exclude ".au,known.com"</dt><dd>drop rows matching these. Repeatable</dd>
+      <dt>--exclude-file known.csv</dt><dd>same, from a file or the first column of a CSV</dd>
+      <dt>--min-score 50</dt><dd>drop rows scoring below this</dd>
+      <dt>--drop-own</dt><dd>drop the customer's own domain from the results</dd>
+      <dt>--logo customer.png</dt><dd>use this logo, a file or a URL, instead of looking one up</dd>
+      <dt>--no-logo</dt><dd>look up nothing. The names are written instead</dd>
       <dt>--rows 50</dt><dd>rows listed under each count</dd>
+      <dt>--wait 300</dt><dd>seconds to let each search finish. A big tenant needs longer</dd>
       <dt>--no-pdf</dt><dd>write the HTML only</dd>
       <dt>--no-open</dt><dd>print the path instead of opening it</dd>
     </dl>
-    <div class="cmd"><code id="cmd-full">bash ~/Downloads/axur-report.sh --brand BRAND --domain customer.com --key YOUR_API_KEY</code>
+    <div class="cmd"><code id="cmd-full">bash ~/Downloads/axur-report.sh --brand BRAND --domain customer.com --key YOUR_API_KEY --save-config customer.conf</code>
       <button class="copy" data-cmd="cmd-full">Copy</button></div>
+    <p class="note">Every run after that, for the same customer:</p>
+    <div class="cmd"><code id="cmd-again">bash ~/Downloads/axur-report.sh --config customer.conf</code>
+      <button class="copy" data-cmd="cmd-again">Copy</button></div>
     <p class="note">It writes a summary page, then the records behind each number, and a PDF
-      if Chrome or Edge is installed. Passwords are never included. The Windows version
-      prints the counts only.</p>
+      if Chrome or Edge is installed. Passwords are never included. Mac and Windows write the
+      same report.</p>
   </section>
 
 </div>
@@ -361,8 +374,12 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
     var f = document.getElementById('cmd-full');
     if (f) {
       var b = v.BRAND.indexOf(' ') > -1 ? '"' + v.BRAND + '"' : v.BRAND;
+      // the config file is named after the domain, so the second command is one flag
+      var conf = (v.LABEL || 'customer') + '.conf';
       f.textContent = 'bash ~/Downloads/axur-report.sh --brand ' + b +
-                      ' --domain ' + v.DOMAIN + ' --key YOUR_API_KEY';
+                      ' --domain ' + v.DOMAIN + ' --key YOUR_API_KEY --save-config ' + conf;
+      var g = document.getElementById('cmd-again');
+      if (g) g.textContent = 'bash ~/Downloads/axur-report.sh --config ' + conf;
     }
     try { localStorage.setItem('axur-sheet', JSON.stringify({b:brandI.value, d:domainI.value})); } catch(e){}
   }
