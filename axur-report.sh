@@ -194,8 +194,13 @@ echo "-------------------------------------------"
 run "Leaked credentials" credential  "emailDomain=\"$DOMAIN\""
 run "In plaintext"       credential  "emailDomain=\"$DOMAIN\" AND passwordType=\"PLAIN\""
 run "Phishing pages"     signal-lake "impersonatedBrandsHigh=\"$BRAND\""
+# The report draws the mail-enabled count as part of the lookalike count, so the
+# two searches must start from the same set. They did not: the parent used the
+# cleaned label and the subset used the plain one, which matches far more, and
+# equifax.com came back with 385 mail-enabled out of 78 registered. The subset
+# is now the parent query with the mail filter added, and nothing else.
 run "Lookalike domains"  signal-lake "sanitizedDomainLabel=$LABEL~1"
-run "Mail-enabled lookalikes" signal-lake "domainLabel=$LABEL~1 AND dnsRecordMX=*"
+run "Mail-enabled lookalikes" signal-lake "sanitizedDomainLabel=$LABEL~1 AND dnsRecordMX=*"
 echo "-------------------------------------------"
 
 # ---------- exclusions ----------
