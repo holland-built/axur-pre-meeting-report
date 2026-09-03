@@ -2,8 +2,8 @@
 """Rebuild the Windows script and the guide's download buttons.
 
 The report's HTML lives once, in axur-report.sh. This lifts it out, wraps it in
-the PowerShell below, and pushes both scripts back into guide.html so its
-download buttons never serve stale code.
+the PowerShell below, and pushes both scripts back into docs/index.html so
+its download buttons never serve stale code.
 
     python3 tools/build.py
 
@@ -15,7 +15,7 @@ import pathlib, sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SH   = ROOT / "axur-report.sh"
 PS1  = ROOT / "axur-report.ps1"
-PAGE = ROOT / "docs" / "guide.html"
+PAGE = ROOT / "docs" / "index.html"
 
 PS_TEMPLATE = r"""<#
   Axur pre-meeting report.
@@ -316,7 +316,7 @@ def quote(line):
 
 def embed(page, start_marker, lines):
     if page.count(start_marker) != 1:
-        sys.exit("marker %r is not unique; guide.html has drifted" % start_marker)
+        sys.exit("marker %r is not unique; docs/index.html has drifted" % start_marker)
     i = page.index(start_marker)
     j = i
     while not page[j:].lstrip().startswith("].join("):

@@ -94,8 +94,8 @@ brand containing the word, so Delta returns Delta Cafés.
 |---|---|
 | `axur-report.sh` | The Mac script |
 | `axur-report.ps1` | The Windows script. Generated, do not edit by hand |
-| `docs/guide.html` | The SE guide, with both scripts embedded in its download buttons |
-| `docs/DEPLOY.md` | How to host the guide |
+| `docs/index.html` | The SE guide, with both scripts embedded in its download buttons |
+| `docs/hosting.md` | How to host the guide |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
 The report's HTML lives once, in `axur-report.sh`. After editing it, run both
