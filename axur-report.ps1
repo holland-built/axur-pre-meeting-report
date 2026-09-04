@@ -256,7 +256,10 @@ function Complete-Search($job) {
   # carries running=true and a totalResults still climbing. Taking the first
   # number reports a fraction as if it were the whole.
   $total = $null; $raw = $null; $running = $true
-  for ($i = 0; $i -lt [int]($Wait / 2); $i++) {
+  # At least one attempt. [int]($Wait / 2) is 0 for -Wait 1, so the loop never
+  # ran, no reply was ever read, and every search reported "timed out".
+  $tries = [Math]::Max(1, [int]($Wait / 2))
+  for ($i = 0; $i -lt $tries; $i++) {
     Start-Sleep -Seconds 2
     try { $r = Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
     $raw = $r.Content
@@ -274,13 +277,21 @@ function Complete-Search($job) {
   if ($ShowRaw) { Write-Host "  $raw" }
 
   $doc = if ($raw) { $raw | ConvertFrom-Json } else { $null }
-  $rows = @(); if ($doc) { $rows = @($doc.result.data) }
+  # $found, not $rows: PowerShell variable names are case-insensitive, so a
+  # local $rows IS the -Rows parameter. Filling it with the result rows left
+  # Select-Object -First holding an array, and the run died on the first search
+  # with "Cannot convert 'System.Object[]' to the type 'System.Int32'".
+  $found = @(); if ($doc) { $found = @($doc.result.data) }
 
   # A filtered number is only honest if it was counted over every row, so when a
   # filter is on we walk the pages. The API ignores page-size parameters, so
-  # page= is the only lever. Same first row twice means paging is unsupported.
+  # page= is the only lever. The same page twice means paging is unsupported.
   if ($anyFilter -and $filtered -contains $name -and $null -ne $total) {
-    $firstKey = if ($rows.Count) { ($rows[0] | ConvertTo-Json -Compress) } else { "" }
+    # Compare each page with the one before it, not with page one. An API that
+    # clamps an out-of-range page to the last page repeats those rows for every
+    # page past the end, and matching page one only let the walk run to the cap
+    # and count 37 copies of the last page.
+    $prevKey = if ($found.Count) { ($found | ConvertTo-Json -Depth 12 -Compress) } else { "" }
     $p = 2
     while ($p -le $PageCap) {
       try { $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content }
@@ -288,17 +299,28 @@ function Complete-Search($job) {
       $pd = $pg | ConvertFrom-Json
       $pr = @($pd.result.data)
       if (-not $pr.Count) { break }
-      if (($pr[0] | ConvertTo-Json -Compress) -eq $firstKey) { break }
-      $rows += $pr
+      $thisKey = ($pr | ConvertTo-Json -Depth 12 -Compress)
+      if ($thisKey -eq $prevKey) { break }
+      $prevKey = $thisKey
+      $found += $pr
       $p++
     }
-    if ($p -gt $PageCap) { $script:partial += $name }
+    # Stopping at the cap and running out of pages look the same from inside
+    # the loop, so a result of exactly PageCap pages was reported as truncated.
+    # Ask for one more page: only new rows mean there really was more.
+    if ($p -gt $PageCap) {
+      try {
+        $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content
+        $pr = @(($pg | ConvertFrom-Json).result.data)
+        if ($pr.Count -and ($pr | ConvertTo-Json -Depth 12 -Compress) -ne $prevKey) { $script:partial += $name }
+      } catch { }
+    }
   }
 
-  if ($anyFilter -and $filtered -contains $name -and $rows.Count) {
-    $kept = @($rows | Where-Object { Test-Keep $_ })
+  if ($anyFilter -and $filtered -contains $name -and $found.Count) {
+    $kept = @($found | Where-Object { Test-Keep $_ })
     Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
-    $rows = $kept
+    $found = $kept
     $total = $kept.Count   # the tile and the table below it must agree
   }
 
@@ -307,12 +329,12 @@ function Complete-Search($job) {
   # hashes, the length and the passwordHas* flags together are a recipe for
   # guessing the password this report says it does not include. passwordType is
   # kept, because PLAIN vs HASH is the point of one of the five searches.
-  foreach ($r in $rows) {
+  foreach ($r in $found) {
     foreach ($n in @($r.PSObject.Properties.Name)) {
       if ($n -ne 'passwordType' -and $n -match '(?i)password|hash') { $r.$n = '[removed]' }
     }
   }
-  $keep = @($rows | Select-Object -First $Rows)
+  $keep = @($found | Select-Object -First $Rows)
   $reply = @{ result = @{ status = @{ totalResults = $total }; data = $keep } }
   [pscustomobject]@{
     name = $name; query = $query; total = $total

@@ -320,7 +320,11 @@ collect_search() { # collect_search N
   # carries "running":true and a totalResults that is still climbing. Taking the
   # first number that appears reports a fraction of the real count as if it were
   # the whole. Wait for running to go false, and say so plainly when it does not.
+  # At least one attempt. WAIT/2 is 0 for --wait 1, and on a seq that does not
+  # count backwards that reads the reply no times at all and every search
+  # reports "timed out" - which is what the Windows script did until now.
   TOTAL=""; OUTJ=""; RUNNING=""; TRIES=$((WAIT / 2))
+  [ "$TRIES" -lt 1 ] && TRIES=1
   for _ in $(seq 1 "$TRIES"); do
     sleep 2
     OUTJ=$(curl -s "$API/search/$ID?page=1&alias=true" -H "@$AUTH")
