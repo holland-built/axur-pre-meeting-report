@@ -676,8 +676,8 @@ $tail = @'
       var a = ago(d);
       return '<span class="date">' + fmtDate(d) + (a ? '<span class="ago">' + a + '</span>' : '') + '</span>';
     },
-    // ["Equifax","Norton"] -> "Equifax and Norton"; the customer's own name in bold.
-    // Axur sometimes sends objects here: [{impersonatedBrand:"Equifax",impersonatedLevel:"high"}]
+    // ["Acme Corp","Sentinel"] -> "Acme Corp and Sentinel"; the customer's own name in bold.
+    // Axur sometimes sends objects here: [{impersonatedBrand:"Acme Corp",impersonatedLevel:"high"}]
     brands: function(v){
       var list = arr(v).map(function(b){ return (b && typeof b === 'object') ? (b.impersonatedBrand || b.name || str(b)) : str(b); })
                        .filter(function(b){ return b !== ''; });

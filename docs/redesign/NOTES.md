@@ -35,7 +35,7 @@ headless-Chrome recipe. Dummy customer: Larkspur Financial (fictional).
 | Raw | Shown |
 |---|---|
 | `969235200000` | `17 Sep 2000` plus "25 years ago" underneath |
-| `["Larkspur Financial","Norton"]` | "**Larkspur Financial** and Norton" (customer name bold) |
+| `["Larkspur Financial","Sentinel Security"]` | "**Larkspur Financial** and Sentinel Security" (customer name bold) |
 | `riskScore: 4.7` / `92.1` | number plus a 56px meter; grey under 40, amber 40–69, red 70+ |
 | `contentType: "Other"` | "Not classified" (map in `CONTENT`) |
 | `passwordType: "PLAIN"` | red dot "Readable"; anything else grey dot "Hashed" |
@@ -78,12 +78,12 @@ headless-Chrome recipe. Dummy customer: Larkspur Financial (fictional).
 3. Query strings are stripped from URLs. If a path is evidence, the SE may want it whole.
 4. Section 02 and 05 are subsets of 01 and 04 and mostly repeat rows. In the real
    report they might be better as a filter on the parent table, or dropped.
-5. `SOURCE` and `CONTENT` maps are hand-written for the values in the Equifax sample.
+5. `SOURCE` and `CONTENT` maps are hand-written for the values in the sample data.
    Unknown values fall through unchanged, so nothing breaks, but the list needs
    growing as new values appear.
 6. The `.txt .go` link text ("See the records") prints on paper. It still makes sense
    there because it names the section number, but it is a link that cannot be clicked.
-7. The Equifax sample has "Mail-enabled lookalikes" (385) larger than "Lookalike
+7. The sample data has "Mail-enabled lookalikes" (385) larger than "Lookalike
    domains" (78) because the two queries use different fields
    (`domainLabel` vs `sanitizedDomainLabel`). The card presents one as a subset of the
    other, which the meter would then draw at more than 100%. The script clamps it, but
