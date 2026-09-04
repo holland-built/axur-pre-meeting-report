@@ -132,6 +132,20 @@ code{font-family:var(--mono);font-size:14px;background:var(--soft);
 .get .arw{font-size:15px;line-height:1}
 .getrow{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-sm);margin-top:var(--s-md)}
 .getcopy{min-width:0}
+.os{display:flex;gap:var(--s-lg);margin-top:var(--s-md);font-size:15px}
+.os label{display:inline-flex;align-items:center;gap:7px;margin:0;color:var(--ink);cursor:pointer}
+.os input{width:16px;height:16px;min-height:0;padding:0;margin:0;accent-color:var(--accent);cursor:pointer}
+.opts{display:flex;flex-direction:column;gap:6px;margin-top:var(--s-md)}
+.opt{display:grid;grid-template-columns:16px 1fr;column-gap:var(--s-md);align-items:start;
+     padding:10px 14px 11px;border:1px solid var(--hairline);border-radius:var(--r-md);
+     background:var(--canvas);cursor:pointer}
+.opt:hover{border-color:#c3cfdc}
+.opt input{grid-row:1/3;width:16px;height:16px;margin:2px 0 0;accent-color:var(--accent);cursor:pointer}
+.opt-t{font-size:15px;font-weight:500;line-height:1.35;color:var(--ink)}
+.opt-d{font-size:14px;line-height:1.4;color:var(--mute);margin-top:1px}
+.opt:has(input:checked){background:var(--accent-soft);border-color:var(--accent)}
+.opt:has(input:checked) .opt-t{color:var(--accent-deep)}
+.opt:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 dl.flags{display:grid;grid-template-columns:max-content 1fr;gap:var(--s-xs) var(--s-lg);
          margin:var(--s-lg) 0 0;font-size:15px}
 dl.flags dt{font-family:var(--mono);font-size:14px;color:var(--ink);letter-spacing:-0.39px}
@@ -190,80 +204,9 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
 
   <section class="step">
     <span class="num">02</span>
-    <h2>Run the five searches</h2>
-    <p class="note">All five run at <a class="link" href="https://one.axur.com/threat-hunting" target="_blank" rel="noopener"><code class="url">one.axur.com/threat-hunting</code> <span class="arw">&#8599;</span></a>.
-      <b>Set the source first.</b> It opens on Files, and the wrong one says Field not found.</p>
-    <a class="pill" href="https://one.axur.com/threat-hunting" target="_blank" rel="noopener">
-      Open Threat Hunting in Axur <span class="arw">&#8599;</span></a>
-    <div class="rows" id="rows">
-      <div class="row" data-src="Credentials" data-tpl='emailDomain="{DOMAIN}"'>
-        <div><div class="nm">Exposed credentials</div><div class="src">Credentials</div>
-          <div class="q"></div></div>
-        <button class="copy">Copy</button></div>
-      <div class="row" data-src="Credentials" data-tpl='emailDomain="{DOMAIN}" AND passwordType="PLAIN"'>
-        <div><div class="nm">Passwords in readable form</div><div class="src">Credentials</div>
-          <div class="q"></div></div>
-        <button class="copy">Copy</button></div>
-      <div class="row" data-src="URLs &amp; Domains" data-tpl='impersonatedBrandsHigh="{BRAND}"'>
-        <div><div class="nm">Impersonation sites</div><div class="src">URLs &amp; Domains</div>
-          <div class="q"></div></div>
-        <button class="copy">Copy</button></div>
-      <div class="row" data-src="URLs &amp; Domains" data-tpl="sanitizedDomainLabel={LABEL}~1">
-        <div><div class="nm">Lookalike domains</div><div class="src">URLs &amp; Domains</div>
-          <div class="q"></div></div>
-        <button class="copy">Copy</button></div>
-      <div class="row" data-src="URLs &amp; Domains" data-tpl="domainLabel={LABEL}~1 AND dnsRecordMX=*">
-        <div><div class="nm">Mail-enabled lookalikes</div><div class="src">URLs &amp; Domains</div>
-          <div class="q"></div></div>
-        <button class="copy">Copy</button></div>
-    </div>
-    <p class="note">Two of these mislead. <b>Impersonation sites</b> matches any brand whose
-      name contains the word, so read the Impersonated brand column and confirm the rows are
-      your customer. <b>Lookalike domains</b> uses the cleaned field; the plain field returns
-      thousands and is only useful with the mail-record filter attached.</p>
-  </section>
-
-  <section class="step">
-    <span class="num">03</span>
-    <h2>Download the attack surface</h2>
-    <ol class="plain">
-      <li>Open <a class="link" href="https://one.axur.com/easm" target="_blank" rel="noopener"><code class="url">one.axur.com/easm</code> <span class="arw">&#8599;</span></a> and switch to Exposures.</li>
-      <li>Open <b>Hostnames</b> and tick the customer's. There is no select-all.</li>
-      <li>Click <b>Download all</b>. The file arrives at once, holding exactly what the filter shows.</li>
-    </ol>
-    <p class="note">Do not screenshot the Risk Matrix for a customer. It ignores every filter
-      and always counts the whole tenant.</p>
-  </section>
-
-  <section class="step">
-    <span class="num">04</span>
-    <h2>Export the rows you need</h2>
-    <ol class="plain">
-      <li>Click <b>Export</b>, above the results table.</li>
-      <li>Type <b>1,000</b> in Quantity to be exported.</li>
-      <li>A link arrives by email, good for seven days. Nothing downloads on the spot.</li>
-    </ol>
-    <p class="note">One credit per hundred rows, counted on the rows that exist. The dialog
-      shows the cost before you commit.</p>
-  </section>
-
-  <section class="step">
-    <span class="num">05</span>
-    <h2>Handle the file like a password</h2>
-    <div class="warn">
-      <b>Nothing here is masked.</b>
-      <p>Axur's screen shows only the last character of a password. The export, the source
-        file and the report this script writes all show the whole thing. Every account in it
-        should be reset. Send the file the way you would send the credentials, and delete it
-        once the resets are done.</p>
-    </div>
-  </section>
-
-  <section class="step">
-    <span class="num">06</span>
-    <h2>Or run all five at once</h2>
-    <p class="note">Only worth it for several customers, or a scheduled run. For one meeting
-      the Copy buttons are quicker.</p>
+    <h2>Run the script</h2>
+    <p class="note">One line writes the whole report. Everything below this is the same job by
+      hand, for when the API key is not ready.</p>
     <ol class="plain">
       <li>Axur, gear icon, <b>My preferences</b>, <b>API keys</b>, Generate New Key. Copy it
         once; Axur never shows it again.</li>
@@ -286,25 +229,24 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
           <button class="copy" data-cmd="cmd-win">Copy</button></div>
       </li>
     </ol>
-    <p class="note">Skip the questions with any of these. Windows takes the same ones as
-      <code>-Brand</code>, <code>-Domain</code>, <code>-Config</code> and so on.</p>
-    <dl class="flags">
-      <dt>--brand "BRAND"</dt><dd>brand, as Axur spells it. Quote it only if it has a space</dd>
-      <dt>--domain customer.com</dt><dd>customer domain</dd>
-      <dt>--key YOUR_API_KEY</dt><dd>your API key. Never saved to a file</dd>
-      <dt>--save-config customer.conf</dt><dd>write this run's settings to a file, so next time is one flag</dd>
-      <dt>--config customer.conf</dt><dd>read them back. Any flag you add still wins</dd>
-      <dt>--exclude ".au,known.com"</dt><dd>drop rows matching these. Repeatable</dd>
-      <dt>--exclude-file known.csv</dt><dd>same, from a file or the first column of a CSV</dd>
-      <dt>--min-score 50</dt><dd>drop rows scoring below this</dd>
-      <dt>--drop-own</dt><dd>drop the customer's own domain from the results</dd>
-      <dt>--logo customer.png</dt><dd>use this logo, a file or a URL, instead of looking one up</dd>
-      <dt>--no-logo</dt><dd>look up nothing. The names are written instead</dd>
-      <dt>--rows 50</dt><dd>rows listed under each count</dd>
-      <dt>--wait 300</dt><dd>seconds to let each search finish. A big tenant needs longer</dd>
-      <dt>--no-pdf</dt><dd>write the HTML only</dd>
-      <dt>--no-open</dt><dd>print the path instead of opening it</dd>
-    </dl>
+    <p class="note">Tick what you want. The line below fills itself in, and Windows takes the
+      same options as <code>-Brand</code>, <code>-Domain</code>, <code>-DropOwn</code> and so on.</p>
+    <div class="os">
+      <label><input type="radio" name="os" value="mac" checked> macOS</label>
+      <label><input type="radio" name="os" value="win"> Windows</label>
+    </div>
+    <div class="opts" role="group" aria-label="Script options">
+      <label class="opt"><input type="checkbox" data-f="--drop-own"><span class="opt-t">Drop their own domain</span><span class="opt-d">Their real site shows up as a lookalike of itself</span></label>
+      <label class="opt"><input type="checkbox" data-f="--min-score 50"><span class="opt-t">Score 50 and up only</span><span class="opt-d">Cuts parked and dead domains from the lookalike rows</span></label>
+      <label class="opt"><input type="checkbox" data-f="--all-time"><span class="opt-t">Every record, not just the last 30 days</span><span class="opt-d">Slower, and the counts run a lot higher</span></label>
+      <label class="opt"><input type="checkbox" data-f="--mask-passwords"><span class="opt-t">Mask the passwords</span><span class="opt-d">Prints <code>h*****2</code> rather than the password itself</span></label>
+      <label class="opt"><input type="checkbox" data-f="--rows 100"><span class="opt-t">100 rows under each count</span><span class="opt-d">Default is 50. More rows, longer PDF</span></label>
+      <label class="opt"><input type="checkbox" data-f="--exclude-file known.csv"><span class="opt-t">Exclude a list of known domains</span><span class="opt-d">One per line in a <code>.csv</code>, in the folder you run from</span></label>
+      <label class="opt"><input type="checkbox" data-f="--logo customer.png"><span class="opt-t">Use my logo file</span><span class="opt-d">The lookup picked the wrong logo, or none</span></label>
+      <label class="opt"><input type="checkbox" data-f="--wait 600"><span class="opt-t">Wait longer per search</span><span class="opt-d">Big customer. A search timed out last time</span></label>
+      <label class="opt"><input type="checkbox" data-f="--no-pdf"><span class="opt-t">HTML only</span><span class="opt-d">No Chrome or Edge on this machine</span></label>
+      <label class="opt"><input type="checkbox" data-f="--save-config customer.conf" checked><span class="opt-t">Save these settings</span><span class="opt-d">Next time is <code>--config customer.conf</code> and nothing else</span></label>
+    </div>
     <div class="cmd"><code id="cmd-full">bash ~/Downloads/axur-report.sh --brand BRAND --domain customer.com --key YOUR_API_KEY --save-config customer.conf</code>
       <button class="copy" data-cmd="cmd-full">Copy</button></div>
     <p class="note">Every run after that, for the same customer:</p>
@@ -313,6 +255,77 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
     <p class="note">It writes a summary page, then the records behind each number, and a PDF
       if Chrome or Edge is installed. The leaked passwords are in it in full. Mac and Windows
       write the same report.</p>
+  </section>
+
+  <section class="step">
+    <span class="num">03</span>
+    <h2>Handle the file like a password</h2>
+    <div class="warn">
+      <b>Nothing here is masked.</b>
+      <p>Axur's screen shows only the last character of a password. The export, the source
+        file and the report this script writes all show the whole thing. Every account in it
+        should be reset. Send the file the way you would send the credentials, and delete it
+        once the resets are done.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="num">04</span>
+    <h2>By hand: run the five searches</h2>
+    <p class="note">All five run at <a class="link" href="https://one.axur.com/threat-hunting" target="_blank" rel="noopener"><code class="url">one.axur.com/threat-hunting</code> <span class="arw">&#8599;</span></a>.
+      <b>Set the source first.</b> It opens on Files, and the wrong one says Field not found.</p>
+    <a class="pill" href="https://one.axur.com/threat-hunting" target="_blank" rel="noopener">
+      Open Threat Hunting in Axur <span class="arw">&#8599;</span></a>
+    <div class="rows" id="rows">
+      <div class="row" data-src="Credentials" data-tpl='emailDomain="{DOMAIN}"'>
+        <div><div class="nm">Exposed credentials</div><div class="src">Credentials</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="Credentials" data-tpl='emailDomain="{DOMAIN}" AND passwordType="PLAIN"'>
+        <div><div class="nm">Passwords in readable form</div><div class="src">Credentials</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="URLs &amp; Domains" data-tpl='impersonatedBrandsHigh="{BRAND}"'>
+        <div><div class="nm">Impersonation sites</div><div class="src">URLs &amp; Domains</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="URLs &amp; Domains" data-tpl="sanitizedDomainLabel={LABEL}~1">
+        <div><div class="nm">Lookalike domains</div><div class="src">URLs &amp; Domains</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+      <div class="row" data-src="URLs &amp; Domains" data-tpl="sanitizedDomainLabel={LABEL}~1 AND dnsRecordMX=*">
+        <div><div class="nm">Mail-enabled lookalikes</div><div class="src">URLs &amp; Domains</div>
+          <div class="q"></div></div>
+        <button class="copy">Copy</button></div>
+    </div>
+    <p class="note">Two of these mislead. <b>Impersonation sites</b> matches any brand whose
+      name contains the word, so read the Impersonated brand column and confirm the rows are
+      your customer. <b>Lookalike domains</b> uses the cleaned field; the plain field returns
+      thousands and is only useful with the mail-record filter attached.</p>
+  </section>
+
+  <section class="step">
+    <span class="num">05</span>
+    <h2>Download the attack surface</h2>
+    <ol class="plain">
+      <li>Open <a class="link" href="https://one.axur.com/easm" target="_blank" rel="noopener"><code class="url">one.axur.com/easm</code> <span class="arw">&#8599;</span></a> and switch to Exposures.</li>
+      <li>Open <b>Hostnames</b> and tick the customer's. There is no select-all.</li>
+      <li>Click <b>Download all</b>. The file arrives at once, holding exactly what the filter shows.</li>
+    </ol>
+    <p class="note">Do not screenshot the Risk Matrix for a customer. It ignores every filter
+      and always counts the whole tenant.</p>
+  </section>
+
+  <section class="step">
+    <span class="num">06</span>
+    <h2>Export the rows you need</h2>
+    <ol class="plain">
+      <li>Click <b>Export</b>, above the results table.</li>
+      <li>Type <b>1,000</b> in Quantity to be exported.</li>
+      <li>A link arrives by email, good for seven days. Nothing downloads on the spot.</li>
+    </ol>
+    <p class="note">One credit per hundred rows, counted on the rows that exist. The dialog
+      shows the cost before you commit.</p>
   </section>
 
 </div>
@@ -379,10 +392,32 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
       var b = v.BRAND.indexOf(' ') > -1 ? '"' + v.BRAND + '"' : v.BRAND;
       // the config file is named after the domain, so the second command is one flag
       var conf = (v.LABEL || 'customer') + '.conf';
-      f.textContent = 'bash ~/Downloads/axur-report.sh --brand ' + b +
-                      ' --domain ' + v.DOMAIN + ' --key YOUR_API_KEY --save-config ' + conf;
+      var winOs = (document.querySelector('input[name=os]:checked') || {}).value === 'win';
+      // Windows spells the same options -Brand, -DropOwn, -MinScore: one word
+      // per dash-separated part, each capitalised.
+      function winFlag(t){
+        return t.replace(/^--([a-z][a-z-]*)/, function(_, name){
+          return '-' + name.split('-').map(function(w){
+            return w.charAt(0).toUpperCase() + w.slice(1); }).join('');
+        });
+      }
+      // the customer's own label stands in for the sample filenames, so the
+      // line is pasteable rather than something to edit afterwards
+      var label = v.LABEL || 'customer';
+      var picked = [].slice.call(document.querySelectorAll('.opt input[data-f]:checked'))
+        .map(function(c){ return c.getAttribute('data-f').replace(/customer/g, label); });
+      var conf2 = picked.join(' ').indexOf('--save-config') > -1 ? label + '.conf' : conf;
+      if (picked.join(' ').indexOf('--save-config') < 0) picked.push('--save-config ' + conf2);
+      var flags = (winOs ? picked.map(winFlag) : picked).join(' ');
+      f.textContent = winOs
+        ? 'powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\\Downloads\\axur-report.ps1 -Brand ' +
+          b + ' -Domain ' + v.DOMAIN + ' -ApiKey YOUR_API_KEY ' + flags
+        : 'bash ~/Downloads/axur-report.sh --brand ' + b +
+          ' --domain ' + v.DOMAIN + ' --key YOUR_API_KEY ' + flags;
       var g = document.getElementById('cmd-again');
-      if (g) g.textContent = 'bash ~/Downloads/axur-report.sh --config ' + conf;
+      if (g) g.textContent = winOs
+        ? 'powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\\Downloads\\axur-report.ps1 -Config ' + conf2
+        : 'bash ~/Downloads/axur-report.sh --config ' + conf2;
     }
     try { localStorage.setItem('axur-sheet', JSON.stringify({b:brandI.value, d:domainI.value})); } catch(e){}
   }
@@ -392,6 +427,10 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
     if (saved.b) brandI.value = saved.b;
     if (saved.d) domainI.value = saved.d;
   } catch(e){}
+  document.addEventListener('change', function(e){
+    var t = e.target;
+    if (t && t.closest && t.closest('.opt, .os')) render();
+  });
   brandI.addEventListener('input', render);
   domainI.addEventListener('input', render);
   render();
