@@ -1,17 +1,27 @@
 # Axur pre-meeting report
 
 One script asks Axur what it knows about a prospect and writes the answer as a
-report you can send. Five numbers: leaked credentials, readable passwords,
-impersonation sites, lookalike domains, and the lookalikes that can send mail.
+report you can send. It runs five searches and puts the counts on a cover page,
+with the records behind each one after it, and a PDF beside the HTML.
 
-You need an Axur API key, and Chrome or Edge for the PDF.
+| The number | What it counts |
+|---|---|
+| Leaked credentials | Accounts on the domain found in breaches and dumps |
+| Readable passwords | The subset whose password was stored in clear text |
+| Impersonation sites | Pages built to look like the brand |
+| Lookalike domains | Names one character away from theirs |
+| Mail-enabled lookalikes | Of those, the ones that can already send mail |
 
-Nothing to install: the Mac script uses curl, sed and perl, all of which ship
-with macOS, and the Windows script is PowerShell only.
+## Requirements
 
-The Windows script has been run end to end on PowerShell 7.6.5. It has not been
-run on Windows PowerShell 5.1, the one `powershell.exe` starts, so treat that as
-untested rather than supported.
+An Axur API key, and Chrome or Edge for the PDF. Nothing else to install: the
+Mac script uses curl, sed and perl, which all ship with macOS, and the Windows
+script needs only PowerShell.
+
+> [!NOTE]
+> The Windows script has been run end to end on PowerShell 7.6.5. It has never
+> been run on Windows PowerShell 5.1, the one `powershell.exe` starts. Treat 5.1
+> as untested rather than supported.
 
 ## Get a key
 
@@ -155,9 +165,12 @@ writes the company names instead.
 ## What you get
 
 A summary page, the records behind each number, and a PDF. It opens when it is
-done. The leaked passwords are written to the file in full, so treat the report
-as you would treat the credentials themselves: send it the way you would send a
-password, and delete it once the accounts are reset.
+done.
+
+> [!WARNING]
+> The leaked passwords are written to the report in full. Treat the file as you
+> would treat the credentials themselves: every account in it needs a reset, send
+> it the way you would send a password, and delete it once the resets are done.
 
 Read the Impersonated brand column before you send it: that search matches any
 brand whose name contains the word, so a one-word brand picks up
@@ -169,7 +182,7 @@ every page, back to the summary.
 
 ## Files
 
-| | |
+| Path | What it is |
 |---|---|
 | `axur-report.sh` | The Mac script |
 | `axur-report.ps1` | The Windows script. Generated, do not edit by hand |
@@ -178,14 +191,10 @@ every page, back to the summary.
 | `docs/redesign/` | An earlier look for the report, kept for reference |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
-`axur-report.sh` holds the report's HTML. Two other files carry a copy of it:
-`axur-report.ps1`, and the download buttons in the guide.
-
-This command rewrites both copies from the shell script:
+`axur-report.sh` holds the report's HTML, and two files carry a copy of it:
+`axur-report.ps1`, and the guide's download buttons. Rebuild both after every
+edit to the shell script, or they keep handing out the previous report.
 
 ```bash
 python3 tools/build.py
 ```
-
-Run it every time you edit `axur-report.sh`. Skip it and those two files keep
-handing out the previous version of the report.
