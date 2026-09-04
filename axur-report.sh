@@ -11,6 +11,11 @@
 #   --rows N          rows to pull behind each number (default 50)
 #   --wait SECONDS    how long to let each search finish (default 300). A big
 #                     tenant needs longer; a count taken early is too low
+#   --days N          only records Axur saw in the last N days (default 30).
+#                     A narrower window is a smaller result and a faster run
+#   --all-time        no date limit. Slower, and the count can run to thousands
+#   --mask-passwords  print a password as its first and last character with
+#                     stars between, instead of in full
 #   --min-score N     drop rows scoring below N (lookalike and phishing only)
 #   --exclude LIST    drop rows matching these, comma separated. ".au,known.com"
 #                     repeatable, so several --exclude add up
@@ -29,6 +34,7 @@
 API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
 MINSCORE=""; EXCLUDE=""; EXCLUDEFILE=""; PAGECAP=40; WAIT=300
+DAYS=30; MASKPW=""
 LOGOSRC=""; NOLOGO=""; DROPOWN=""; CONFIG=""; SAVECONFIG=""
 
 expand_user_path() {
@@ -93,6 +99,9 @@ while [ $# -gt 0 ]; do
     --key)        need_value "$1" $#; KEY="$2"; shift 2 ;;
     --rows)       need_value "$1" $#; ROWS="$2"; shift 2 ;;
     --wait)       need_value "$1" $#; WAIT="$2"; shift 2 ;;
+    --days)       need_value "$1" $#; DAYS="$2"; shift 2 ;;
+    --all-time)   DAYS=0; shift ;;
+    --mask-passwords) MASKPW=1; shift ;;
     --min-score)  need_value "$1" $#; MINSCORE="$2"; shift 2 ;;
     --exclude)    need_value "$1" $#; EXCLUDE="${EXCLUDE:+$EXCLUDE,}$2"; shift 2 ;;
     --exclude-file) need_value "$1" $#; EXCLUDEFILE="$2"; shift 2 ;;
@@ -185,6 +194,9 @@ esac
 case "$WAIT" in
   ''|*[!0-9]*) echo "--wait takes a number of seconds, not \"$WAIT\"." >&2; exit 1 ;;
 esac
+case "$DAYS" in
+  ''|*[!0-9]*) echo "--days takes a number, not \"$DAYS\"." >&2; exit 1 ;;
+esac
 if [ -n "$MINSCORE" ]; then
   case "$MINSCORE" in
     ''|*[!0-9.]*) echo "--min-score takes a number, not \"$MINSCORE\"." >&2; exit 1 ;;
@@ -214,6 +226,15 @@ trap 'rm -rf "$TMP"' EXIT
 # arguments, on screen for anyone who ran ps while a request was open. curl reads
 # a header from a file with -H @file; mktemp -d makes a directory only this
 # user can enter, and the trap above removes it when the run ends.
+# --mask-passwords rewrites the value where the reply is cleaned, so the masked
+# form is what lands in the file. The password itself never reaches the report.
+# One character each end is enough to recognise a password you already hold and
+# useless to anyone who does not.
+MASKSED=""
+if [ -n "$MASKPW" ]; then
+  MASKSED='; s/"password"[[:space:]]*:[[:space:]]*"(.)[^"]*(.)"/"password":"\1*****\2"/g; s/"password"[[:space:]]*:[[:space:]]*"[^"]?"/"password":"*"/g'
+fi
+
 AUTH="$TMP/auth"
 (umask 077; printf 'Authorization: Bearer %s\n' "$KEY" > "$AUTH")
 N=0
@@ -274,11 +295,27 @@ OURS_H=$(html_escape "$OURS_DATA")
 # Axur runs a search on its own side once it is started, so the five overlap if
 # they are all started first. Waiting for them one at a time cost the sum of
 # five waits; starting them together costs about the longest one.
+# Epoch milliseconds for the start of the window, which is how every date in
+# these replies is expressed. Computed once so all five searches share a cutoff.
+SINCE=""
+if [ "$DAYS" -gt 0 ]; then
+  SINCE=$(( ( $(date +%s) - DAYS * 86400 ) * 1000 ))
+fi
+
 start_search() { # start_search NAME SOURCE QUERY
   NAME="$1"; SOURCE="$2"; QUERY="$3"; N=$((N+1))
-  printf '%s' "$NAME"  > "$TMP/$N.name"
-  printf '%s' "$QUERY" > "$TMP/$N.query"
-  ESC=$(printf '%s' "$QUERY" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  # The date clause narrows the result, which is the whole point of --days: a
+  # smaller result is fewer pages to walk and a faster run. This syntax is not
+  # documented anywhere we can check, so DATED is tried first and the plain
+  # query is the fallback below rather than the run failing.
+  DATED="$QUERY"
+  [ -n "$SINCE" ] && DATED="$QUERY AND detectionDate>=$SINCE"
+  printf '%s' "$NAME" > "$TMP/$N.name"
+  TRY="$DATED"
+  DATE_TRIED=""
+  while :; do
+  printf '%s' "$TRY" > "$TMP/$N.query"
+  ESC=$(printf '%s' "$TRY" | sed 's/\\/\\\\/g; s/"/\\"/g')
   BODY=$(printf '{"query":"%s","source":"%s"}' "$ESC" "$SOURCE")
   ATTEMPT=0
   while :; do
@@ -295,6 +332,19 @@ start_search() { # start_search NAME SOURCE QUERY
   done
   [ -n "$DEBUG" ] && printf '  HTTP %s %s\n' "$CODE" "$START"
   ID=$(printf '%s' "$START" | sed -n 's/.*"searchId":"\([^"]*\)".*/\1/p')
+  # A dated query the API will not accept must not take the run down with it.
+  # Drop the date clause, say so once, and carry on with the whole result.
+  if [ -z "$ID" ] && [ -n "$SINCE" ] && [ -z "$DATE_TRIED" ] && [ "$TRY" != "$QUERY" ]; then
+    DATE_TRIED=1
+    if [ -z "$DATE_WARNED" ]; then
+      echo "  Axur would not take the --days filter, so the searches cover all time." >&2
+      DATE_WARNED=1
+    fi
+    TRY="$QUERY"
+    continue
+  fi
+  break
+  done
   if [ -z "$ID" ]; then
     printf '%-26s' "$NAME"
     case "$CODE" in
@@ -379,7 +429,7 @@ collect_search() { # collect_search N
           # a real page beyond the cap is the one thing that means "there was more"
           [ "$P" -gt "$PAGECAP" ] && { PARTIAL=1; break; }
           PREVROW="$THISROW"
-          printf '%s' "$PG" | sed -E 's#</#<\\/#g' > "$TMP/$N.page$P"
+          printf '%s' "$PG" | sed -E "s#</#<\\\\/#g${MASKSED}" > "$TMP/$N.page$P"
           PAGES=$((PAGES+1))
           P=$((P+1))
         done
@@ -394,7 +444,7 @@ collect_search() { # collect_search N
     # The reply goes into the report as it arrived, passwords included. Only
     # "</" is rewritten, because it would end the script block the payload sits
     # in. See the note on the cover for what that means for handling the file.
-    printf '%s' "${OUTJ:-null}" | sed -E 's#</#<\\/#g'
+    printf '%s' "${OUTJ:-null}" | sed -E "s#</#<\\\\/#g${MASKSED}"
     printf '}'
   } > "$TMP/$N.json"
 }
@@ -1103,12 +1153,12 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       {k:'registrantOrganization', h:'Registered to',  f:'owner',   w:18, wp:16},
       {k:'registrar',     h:'Through',                 f:'text',    w:14, wp:15},
       {k:'countryNames',  h:'Country',                 f:'country', w:10, wp:10},
-      {k:'dnsEntriesRecordMX', h:'Mail set up',        f:'mx',      w:21, wp:22},
+      {k:'dnsEntriesRecordMX', h:'Receives mail at',   f:'mx',      w:21, wp:22},
       {k:'domainCreationDate', h:'Registered',         f:'date',    w:13, wp:15} ],
     // this search returns page hits, so the same domain can fill the table; the page path is what tells rows apart
     'Mail-enabled lookalikes': [
       {k:'reference',     h:'Site',                    f:'site',    w:24, wp:22},
-      {k:'dnsEntriesRecordMX', h:'Mail goes through',  f:'mx',      w:24, wp:24},
+      {k:'dnsEntriesRecordMX', h:'Receives mail at',   f:'mx',      w:24, wp:24},
       {k:'registrantOrganization', h:'Registered to',  f:'owner',   w:16, wp:14},
       {k:'registrar',     h:'Through',                 f:'text',    w:14, wp:12},
       {k:'domainCreationDate', h:'Registered',         f:'date',    w:11, wp:14},
@@ -1130,7 +1180,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   /* ---------- copy ---------- */
   var TITLES = { 'Leaked credentials':'Exposed credentials', 'In plaintext':'Passwords in readable form',
                  'Phishing pages':'Impersonation sites', 'Lookalike domains':'Lookalike domains',
-                 'Mail-enabled lookalikes':'Lookalikes with mail switched on' };
+                 'Mail-enabled lookalikes':'Lookalikes set up to receive mail' };
   function heading(name){ return TITLES[name] || name; }
   var MEANS = {
     'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
@@ -1160,9 +1210,9 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out.' },
     { icon:'site', title:'Lookalike domains', go:sectionOf('Lookalike domains'),
       big:n('Lookalike domains'), lab:'registered names one character away from yours', sev:'a',
-      sub:n('Mail-enabled lookalikes'), subLab:'of them have mail switched on, so somebody is running them', subSev:'r',
+      sub:n('Mail-enabled lookalikes'), subLab:'of them can receive mail, so somebody is running them, not parking them', subSev:'r',
       desc:'Domain names one swapped, dropped or doubled letter away from ' + esc(DOMAIN) + '. They exist to be mistaken for you.',
-      why:'A parked lookalike is a nuisance. One with mail records published is being run by somebody, and is the more likely to be used against your staff or your customers.' },
+      why:'A parked lookalike is a nuisance. Mail records say the domain can receive mail, which means somebody wants replies to it and is running it rather than sitting on it. It does not prove they have sent anything.' },
     { icon:'risk', title:'External attack surface', aside:true,
       desc:'The servers, services and open doors reachable from the public internet under your name.',
       why:'Not counted in this report. It comes from a different Axur screen and is supplied as a separate file.' }

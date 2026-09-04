@@ -29,6 +29,11 @@ PS_TEMPLATE = r"""<#
     -SaveConfig F   save this run's customer settings to F (never the API key)
     -Rows N         rows listed under each count (default 50)
     -Wait SECONDS   how long to let each search finish (default 300)
+    -Days N         only records Axur saw in the last N days (default 30).
+                    A narrower window is a smaller result and a faster run
+    -AllTime        no date limit. Slower, and the count can run to thousands
+    -MaskPasswords  print a password as its first and last character with
+                    stars between, instead of in full
     -MinScore N     drop rows scoring below N (lookalike and phishing only)
     -Exclude LIST   drop rows matching these, comma separated. ".au,known.com"
     -ExcludeFile F  same, read from a file or CSV. One per line, first column,
@@ -49,7 +54,8 @@ PS_TEMPLATE = r"""<#
 param(
   [string]$Brand, [string]$Domain, [string]$ApiKey, [string]$Config, [string]$SaveConfig,
   [int]$Rows = 50, [int]$Wait = 300, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
-  [string]$Logo, [switch]$NoLogo, [switch]$DropOwn, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
+  [string]$Logo, [switch]$NoLogo, [switch]$DropOwn, [int]$Days = 30, [switch]$AllTime,
+  [switch]$MaskPasswords, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
 
 $ErrorActionPreference = 'Stop'
@@ -151,6 +157,14 @@ if ($SaveConfig) {
 
 $headers = @{ Authorization = "Bearer $ApiKey" }
 
+# Epoch milliseconds for the start of the window, which is how every date in
+# these replies is expressed. Computed once so all five searches share a cutoff.
+$since = $null
+if (-not $AllTime -and $Days -gt 0) {
+  $since = [long]([DateTimeOffset]::UtcNow.AddDays(-$Days).ToUnixTimeMilliseconds())
+}
+$dateWarned = $false
+
 # Brandfetch serves a real logo to a request carrying a Referer. Baking it in as
 # a data URI means it survives the PDF, an offline mailbox, and blocked images.
 function Get-Logo($url) {
@@ -219,6 +233,15 @@ $partial = @(); $incomplete = @()
 # Keep a row unless the score is below the floor or a pattern matches its
 # domain or url. A credential has neither, so only the three domain searches
 # are ever filtered.
+# -MaskPasswords rewrites the value before it reaches the file, so the masked
+# form is what lands in the report. One character each end is enough to
+# recognise a password you already hold and useless to anyone who does not.
+function Hide-Passwords($text) {
+  if (-not $MaskPasswords) { return $text }
+  $t = [regex]::Replace($text, '"password"\s*:\s*"(.)[^"]*(.)"', '"password":"$1*****$2"')
+  return [regex]::Replace($t, '"password"\s*:\s*"[^"]?"', '"password":"*"')
+}
+
 function Test-Keep($row) {
   if ($MinScore) {
     $sc = $row.riskScore
@@ -246,13 +269,19 @@ function Test-Keep($row) {
 # are all started first. Waiting for them one at a time cost the sum of five
 # waits; starting them together costs about the longest one.
 function Start-Search($name, $source, $query) {
-  $body = @{ query = $query; source = $source } | ConvertTo-Json -Compress
+  # The date clause narrows the result, which is the whole point of -Days: a
+  # smaller result is fewer pages to walk and a faster run. This syntax is not
+  # documented anywhere we can check, so it is tried first and the plain query
+  # is the fallback rather than the run failing.
+  $try = $query
+  if ($null -ne $since) { $try = "$query AND detectionDate>=$since" }
+  $dateTried = $false
   $start = $null; $attempt = 0
   while ($true) {
+    $body = @{ query = $try; source = $source } | ConvertTo-Json -Compress
     try {
       $start = Invoke-RestMethod -Method Post -Uri "$api/search" -Headers $headers `
                -ContentType "application/json" -Body $body
-      break
     } catch {
       $c = $null
       if ($_.Exception.Response) { $c = [int]$_.Exception.Response.StatusCode }
@@ -270,11 +299,24 @@ function Start-Search($name, $source, $query) {
         429 { Write-Host " still rate limited after waiting. Try again in a minute." }
         default { Write-Host " could not start (HTTP $c)" }
       }
-      return [pscustomobject]@{ name = $name; query = $query; id = $null }
+      return [pscustomobject]@{ name = $name; query = $try; id = $null }
     }
+    # A dated query the API will not accept must not take the run down with it.
+    # Axur answers 200 with no searchId as readily as it errors, so this sits
+    # here rather than in the catch above. Drop the clause, say so once, retry.
+    if (-not $start.searchId -and -not $dateTried -and $try -ne $query) {
+      $dateTried = $true
+      if (-not $script:dateWarned) {
+        Write-Host "  Axur would not take the -Days filter, so the searches cover all time."
+        $script:dateWarned = $true
+      }
+      $try = $query
+      continue
+    }
+    break
   }
   Write-Host ("  {0,-26} started" -f $name)
-  return [pscustomobject]@{ name = $name; query = $query; id = $start.searchId }
+  return [pscustomobject]@{ name = $name; query = $try; id = $start.searchId }
 }
 
 function Complete-Search($job) {
@@ -397,7 +439,7 @@ $payload = ($results | ForEach-Object {
   '<script type="application/json" id="payload-' + $i + '">' +
   '{"name":"' + (Esc $_.name) + '","query":"' + (Esc $_.query) + '","total":' +
   $(if ($null -eq $_.total) { 'null' } else { "$($_.total)" }) + ',"reply":' +
-  ($_.raw -replace '</', '<\/') + '}</script>'
+  (Hide-Passwords ($_.raw -replace '</', '<\/')) + '}</script>'
 }) -join "`n"
 
 Write-Host -NoNewline "Writing the report "
