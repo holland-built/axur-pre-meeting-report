@@ -35,6 +35,16 @@ $ErrorActionPreference = 'Stop'
 $api = "https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
 $PageCap = 40
 
+# The cover writes the brand, the domain and the logo sources into HTML
+# attributes. A quote in any of them closes the attribute early and the rest of
+# the value becomes markup, so a brand of  Larkspur" onload="...  lands as a live
+# event handler in the customer's report. -Config is read without validation, so
+# escape here. The searches and the console keep the value as it was given.
+function ConvertTo-HtmlText($text) {
+  if ($null -eq $text) { return '' }
+  return ([string]$text).Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;')
+}
+
 function Expand-UserPath($path) {
   if (-not $path) { return $path }
   if ($path -eq '~') { return [Environment]::GetFolderPath('UserProfile') }
@@ -190,7 +200,11 @@ function Test-Keep($row) {
     }
   }
   foreach ($p in $patterns) {
-    foreach ($f in @('domain', 'url', 'sourceUrl', 'accessHost')) {
+    # Match a pattern anywhere in a field that names a site. The tables for
+    # phishing pages and mail-enabled lookalikes name the site in 'reference',
+    # which was not on this list, so excluding a domain the SE could read in
+    # the table did nothing at all.
+    foreach ($f in @('domain', 'url', 'sourceUrl', 'accessHost', 'reference', 'renderedReference', 'host', 'accessUrl')) {
       $v = $row.$f
       if ($v -and ([string]$v).ToLower().Contains($p.ToLower())) { return $false }
     }
@@ -602,14 +616,13 @@ $tail = @'
   try { totals = JSON.parse(document.getElementById('totals').textContent) || []; } catch (e) { totals = []; }
   var tot = {};
   totals.forEach(function(t){ tot[t.name] = t.total; });
-  var data = null;
-  function loadPayload(){
-    if (data) return data;
-    var el = document.getElementById('payload');
-    if (!el) return [];
-    try { data = JSON.parse(el.textContent); } catch (e) { data = []; }
-    if (!Array.isArray(data)) data = [];
-    return data;
+  // One search per block. Parsing them together meant a single bad reply threw
+  // once and blanked all five tables, and the empty result was cached, so a
+  // retry could not help either. This throws for the caller to catch and report
+  // in that search's own box.
+  function payloadFor(i){
+    var el = document.getElementById('payload-' + (i + 1));
+    return el ? JSON.parse(el.textContent) : null;
   }
   function n(name){ var t = tot[name]; var v = Number(t); return (t === null || t === undefined || t === '' || isNaN(v)) ? null : v; }
   function show(v){ return v === null ? '&mdash;' : v.toLocaleString('en-GB'); }
@@ -643,7 +656,9 @@ $tail = @'
     if (days < 1) return 'scan day';
     if (days < 30) return days + (days === 1 ? ' day ago' : ' days ago');
     if (days < 365) { var mo = Math.round(days / 30.4); return mo + (mo === 1 ? ' month ago' : ' months ago'); }
-    var y = Math.floor(days / 365.25); return y + (y === 1 ? ' year ago' : ' years ago');
+    // 365.25 here against the 365 in the test above put a record exactly a
+    // year old between the two and printed "0 years ago". One year, one number.
+    var y = Math.floor(days / 365); return y + (y === 1 ? ' year ago' : ' years ago');
   }
   function none(){ return '<span class="none">&mdash;</span>'; }
   // an identifier may break before "@" or after ". / - ? & =", never inside a word
@@ -894,12 +909,13 @@ $tail = @'
   var built = false;
   function buildTables(){
     if (built) return;
-    var d8 = loadPayload();
-    if (!d8.length) return;   // parser has not reached the payload yet; try again later
+    // the blocks sit below this script, so wait until the parser has them all
+    if (totals.length && !document.getElementById('payload-' + totals.length)) return;
     built = true;
     [].slice.call(secs.querySelectorAll('.rowbox')).forEach(function(box){
-      var i = Number(box.getAttribute('data-i')), d = d8[i], t = totals[i];
+      var i = Number(box.getAttribute('data-i')), t = totals[i];
       try {
+        var d = payloadFor(i);
         var rs = rows(d).slice(0, ROWLIMIT), total = n(t.name);
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
         // HIDE gates guessed columns only. COLS is curated by hand, and its
@@ -943,8 +959,8 @@ $tail = @'
 '@
 
 $now = Get-Date
-$head = $head.Replace('{{BRAND}}', $Brand).Replace('{{DOMAIN}}', $Domain).
-              Replace('{{LOGO}}', $custData).Replace('{{OURS}}', $oursData).
+$head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAIN}}', (ConvertTo-HtmlText $Domain)).
+              Replace('{{LOGO}}', (ConvertTo-HtmlText $custData)).Replace('{{OURS}}', (ConvertTo-HtmlText $oursData)).
               Replace('{{DATE_ISO}}',   $now.ToString('yyyy-MM-dd')).
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
               Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy'))
@@ -957,17 +973,23 @@ $totals = ($results | ForEach-Object {
   $(if ($null -eq $_.total) { 'null' } else { "$($_.total)" }) + '}'
 }) -join ",`n"
 
+# One block per search, not one array holding all five. A single malformed
+# reply used to fail the one JSON.parse that fed every table, so one bad reply
+# emptied the whole report. Now it costs only its own table.
+$i = 0
 $payload = ($results | ForEach-Object {
+  $i++
+  '<script type="application/json" id="payload-' + $i + '">' +
   '{"name":"' + (Esc $_.name) + '","query":"' + (Esc $_.query) + '","total":' +
   $(if ($null -eq $_.total) { 'null' } else { "$($_.total)" }) + ',"reply":' +
-  ($_.raw -replace '</', '<\/') + '}'
-}) -join ",`n"
+  ($_.raw -replace '</', '<\/') + '}</script>'
+}) -join "`n"
 
 Write-Host -NoNewline "Writing the report "
 $doc = $head + "`n" +
        '<script type="application/json" id="totals">[' + "`n" + $totals + "`n" + ']</script>' + "`n" +
        $tail + "`n" +
-       '<script type="application/json" id="payload">[' + "`n" + $payload + "`n" + ']</script>' + "`n" +
+       $payload + "`n" +
        '</main></body></html>'
 [IO.File]::WriteAllText($Out, $doc, (New-Object Text.UTF8Encoding $false))
 $abs = (Resolve-Path $Out).Path

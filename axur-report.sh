@@ -128,6 +128,18 @@ DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z' | sed 's#^[a-z]*://##; s/^www\./
 LABEL=$(printf '%s' "$DOMAIN" | cut -d. -f1)
 [ -z "$OUT" ] && OUT="axur-report-$LABEL.html"
 
+# The cover writes the brand and the domain into HTML attributes. A quote in
+# either one closes the attribute early and the rest of the value becomes
+# markup, so a brand of  Larkspur" onload="...  lands as a live event handler in
+# the customer's report. The brand is whatever the SE typed, and a --config file
+# is read without validation, so escape here and put the escaped copies in the
+# page. The searches and the terminal keep the value as it was given.
+html_escape() { # html_escape TEXT -> the same text, safe inside an attribute
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+BRAND_H=$(html_escape "$BRAND")
+DOMAIN_H=$(html_escape "$DOMAIN")
+
 # Brandfetch serves a real logo when the page sends a Referer. A file opened
 # straight off disk does not, so the cover writes the name out instead.
 if [ -n "$BFID" ]; then
@@ -194,6 +206,14 @@ fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+
+# The key must not reach the process list. ps shows every argument of every
+# process to every user on the machine, and the key used to be one of curl's
+# arguments, on screen for anyone who ran ps while a request was open. curl reads
+# a header from a file with -H @file; mktemp -d makes a directory only this
+# user can enter, and the trap above removes it when the run ends.
+AUTH="$TMP/auth"
+(umask 077; printf 'Authorization: Bearer %s\n' "$KEY" > "$AUTH")
 N=0
 
 # Fetch the logo here rather than leaving it to the reader's browser. Brandfetch
@@ -236,12 +256,20 @@ else
   fi
   OURS_DATA=$(fetch_logo "$OURS" "$TMP/ours.bin")
 fi
-[ -n "$LOGO_DATA" ] && LOGO="$LOGO_DATA"
-[ -n "$OURS_DATA" ] && OURS="$OURS_DATA"
+# The cover shows a mark only when the bytes are in hand. Leaving the CDN
+# address in src meant --no-logo still put it in the file, so every reader of
+# the report asked Brandfetch for the customer's domain - the report travels by
+# email and must not tell a third party who it is about. A missing --logo file
+# did the same. Empty src, and onerror writes the name, as the Windows script
+# has always done.
+LOGO="$LOGO_DATA"
+OURS="$OURS_DATA"
 if [ -n "$NOLOGO" ]; then :
 elif [ -n "$LOGO_DATA" ]; then echo " ... got $BRAND"
 elif [ -n "$LOGOSRC" ]; then echo " ... could not read $LOGOSRC, the name will be written instead"
 else echo " ... none for $DOMAIN, the name will be written instead"; fi
+LOGO_H=$(html_escape "$LOGO")
+OURS_H=$(html_escape "$OURS")
 
 # Axur runs a search on its own side once it is started, so the five overlap if
 # they are all started first. Waiting for them one at a time cost the sum of
@@ -254,7 +282,7 @@ start_search() { # start_search NAME SOURCE QUERY
   BODY=$(printf '{"query":"%s","source":"%s"}' "$ESC" "$SOURCE")
   ATTEMPT=0
   while :; do
-    RAW=$(curl -s -w '\n%{http_code}' -X POST "$API/search" -H "Authorization: Bearer $KEY" \
+    RAW=$(curl -s -w '\n%{http_code}' -X POST "$API/search" -H "@$AUTH" \
           -H "Content-Type: application/json" -d "$BODY")
     CODE=$(printf '%s' "$RAW" | tail -n1); START=$(printf '%s' "$RAW" | sed '$d')
     # the gateway allows 30 calls a window, so wait it out rather than failing
@@ -295,7 +323,7 @@ collect_search() { # collect_search N
   TOTAL=""; OUTJ=""; RUNNING=""; TRIES=$((WAIT / 2))
   for _ in $(seq 1 "$TRIES"); do
     sleep 2
-    OUTJ=$(curl -s "$API/search/$ID?page=1&alias=true" -H "Authorization: Bearer $KEY")
+    OUTJ=$(curl -s "$API/search/$ID?page=1&alias=true" -H "@$AUTH")
     TOTAL=$(printf '%s' "$OUTJ" | sed -n 's/.*"totalResults":\([0-9]*\).*/\1/p')
     # BSD sed has no \| alternation, so a true/false pattern never matched
     # and every search waited out the whole timeout. Match the word instead.
@@ -321,18 +349,34 @@ collect_search() { # collect_search N
   case "$NAME" in
     "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
       if [ -n "$MINSCORE$EXCLUDE" ] && [ -n "$TOTAL" ]; then
-        FIRSTROW=$(printf '%s' "$OUTJ" | cksum)
+        # Compare each page with the one before it, not with page one. An API
+        # that clamps an out-of-range page to the last page repeats those rows
+        # for every page past the end: matched against page one only, the walk
+        # ran to the cap, kept 37 copies of the last page and counted them all,
+        # so the number on the cover came out several times the truth.
+        PREVROW=$(printf '%s' "$OUTJ" | cksum)
         P=2
         while [ "$P" -le "$PAGECAP" ]; do
-          PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "Authorization: Bearer $KEY")
+          PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH")
           printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' || break
           THISROW=$(printf '%s' "$PG" | cksum)
-          [ "$THISROW" = "$FIRSTROW" ] && break
+          [ "$THISROW" = "$PREVROW" ] && break
+          PREVROW="$THISROW"
           printf '%s' "$PG" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g' > "$TMP/$N.page$P"
           PAGES=$((PAGES+1))
           P=$((P+1))
         done
-        [ "$P" -gt "$PAGECAP" ] && PARTIAL=1
+        # Stopping at the cap and running out of pages look the same from
+        # inside the loop, so a result of exactly PAGECAP pages was reported as
+        # truncated. Ask for one more page: only a page with new rows on it
+        # means there really was more than we pulled.
+        if [ "$P" -gt "$PAGECAP" ]; then
+          PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH")
+          if printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' &&
+             [ "$(printf '%s' "$PG" | cksum)" != "$PREVROW" ]; then
+            PARTIAL=1
+          fi
+        fi
         [ "$PAGES" -gt 1 ] && printf '  %-26s pulled %s pages for filtering\n' "$NAME" "$PAGES"
       fi ;;
   esac
@@ -440,8 +484,11 @@ ROW: for my $r (@rows) {
   }
   for my $pat (@pats) {
     my $q = quotemeta $pat;
-    # match the pattern anywhere in the domain or url fields only
-    for my $f (qw(domain url sourceUrl accessHost)) {
+    # Match the pattern anywhere in a field that names a site. The tables for
+    # phishing pages and mail-enabled lookalikes name the site in "reference",
+    # which was not on this list, so excluding a domain the SE could read in
+    # the table did nothing at all.
+    for my $f (qw(domain url sourceUrl accessHost reference renderedReference host accessUrl)) {
       my ($v) = $r =~ /"$f"\s*:\s*"([^"]*)"/;
       next unless defined $v;
       next ROW if $v =~ /$q/i;
@@ -465,18 +512,35 @@ if [ -n "$MINSCORE$EXCLUDE" ] && [ ! -x /usr/bin/perl ]; then
   echo "Drop the filters, or install perl, rather than send an unfiltered report." >&2
   exit 1
 fi
+# A filter that fails has to stop the run. The status was thrown away and the
+# unfiltered reply was kept, so a truncated reply left the headline at the raw
+# count with the terminal still printing "done" - the SE emailed an unfiltered
+# report believing it was filtered. Name the searches that failed and exit.
 if [ -n "$MINSCORE$EXCLUDE" ]; then
   printf 'Applying filters... '
+  FILTER_FAILED=""
   for f in "$TMP"/*.json; do
-    grep -q '"source":"signal-lake"\|signal-lake' "$f" 2>/dev/null || true
-    case "$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$f" | head -1)" in
+    NAME=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$f" | head -1)
+    case "$NAME" in
       "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
         B=$(basename "$f" .json)
-        /usr/bin/perl "$TMP/filter.pl" "$MINSCORE" "$EXCLUDE" "$f" "$TMP/$B".page* 2>"$TMP/kept" > "$f.f"
-        if [ -s "$f.f" ]; then mv "$f.f" "$f"; else rm -f "$f.f"; fi ;;
-      *) : ;;
+        if /usr/bin/perl "$TMP/filter.pl" "$MINSCORE" "$EXCLUDE" "$f" "$TMP/$B".page* \
+             2>"$TMP/$B.kept" > "$f.f" && [ -s "$f.f" ]; then
+          mv "$f.f" "$f"
+        else
+          rm -f "$f.f"
+          FILTER_FAILED="$FILTER_FAILED
+  $NAME"
+        fi ;;
     esac
   done
+  if [ -n "$FILTER_FAILED" ]; then
+    echo ''
+    echo "The filter could not read the reply for:$FILTER_FAILED" >&2
+    echo "Those counts and tables would go out unfiltered while the report says they" >&2
+    echo "were filtered. Re-run, or drop --min-score and --exclude." >&2
+    exit 1
+  fi
   echo ' done'
 fi
 
@@ -556,7 +620,7 @@ cat <<HTMLHEAD
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threat exposure: $BRAND</title>
+<title>Threat exposure: $BRAND_H</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -757,28 +821,28 @@ cat <<HTMLHEAD
    footer{padding-top:14px}
  }
 </style></head><body>
-<main data-brand="$BRAND" data-domain="$DOMAIN" data-scan="$(date '+%Y-%m-%d')">
+<main data-brand="$BRAND_H" data-domain="$DOMAIN_H" data-scan="$(date '+%Y-%m-%d')">
 
 <div class="cover" id="top"><div class="wrap">
   <div class="top">
-    <div><img class="ib" src="$OURS" alt="Infoblox" referrerpolicy="origin"
+    <div><img class="ib" src="$OURS_H" alt="Infoblox" referrerpolicy="origin"
          onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span
          class="nm">Infoblox</span></div>
-    <div><img class="cust" src="$LOGO" alt="$BRAND" referrerpolicy="origin"
+    <div><img class="cust" src="$LOGO_H" alt="$BRAND_H" referrerpolicy="origin"
          onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span
-         class="nm">$BRAND</span></div>
+         class="nm">$BRAND_H</span></div>
   </div>
 
   <p class="kicker">Threat exposure &middot; Executive summary</p>
-  <h1>What is visible about <span class="brand">$BRAND</span><br>from the outside</h1>
+  <h1>What is visible about <span class="brand">$BRAND_H</span><br>from the outside</h1>
   <div class="rule"></div>
   <p class="intro">Infoblox looked for exposure tied to your brand and your domain across breach data,
     criminal marketplaces and the public web. Each card below is one measurement. The number on the left
     is the count on $(date '+%d %B %Y'); the text explains what it means and why it matters.</p>
 
   <div class="facts">
-    <div class="fact"><span>Brand searched</span><b>$BRAND</b></div>
-    <div class="fact"><span>Domain searched</span><b>$DOMAIN</b></div>
+    <div class="fact"><span>Brand searched</span><b>$BRAND_H</b></div>
+    <div class="fact"><span>Domain searched</span><b>$DOMAIN_H</b></div>
     <div class="fact"><span>Scan date</span><b>$(date '+%d %b %Y')</b></div>
     <div class="fact"><span>Data source</span><b>Axur (one.axur.com)</b></div>
   </div>
@@ -847,14 +911,13 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   try { totals = JSON.parse(document.getElementById('totals').textContent) || []; } catch (e) { totals = []; }
   var tot = {};
   totals.forEach(function(t){ tot[t.name] = t.total; });
-  var data = null;
-  function loadPayload(){
-    if (data) return data;
-    var el = document.getElementById('payload');
-    if (!el) return [];
-    try { data = JSON.parse(el.textContent); } catch (e) { data = []; }
-    if (!Array.isArray(data)) data = [];
-    return data;
+  // One search per block. Parsing them together meant a single bad reply threw
+  // once and blanked all five tables, and the empty result was cached, so a
+  // retry could not help either. This throws for the caller to catch and report
+  // in that search's own box.
+  function payloadFor(i){
+    var el = document.getElementById('payload-' + (i + 1));
+    return el ? JSON.parse(el.textContent) : null;
   }
   function n(name){ var t = tot[name]; var v = Number(t); return (t === null || t === undefined || t === '' || isNaN(v)) ? null : v; }
   function show(v){ return v === null ? '&mdash;' : v.toLocaleString('en-GB'); }
@@ -888,7 +951,9 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
     if (days < 1) return 'scan day';
     if (days < 30) return days + (days === 1 ? ' day ago' : ' days ago');
     if (days < 365) { var mo = Math.round(days / 30.4); return mo + (mo === 1 ? ' month ago' : ' months ago'); }
-    var y = Math.floor(days / 365.25); return y + (y === 1 ? ' year ago' : ' years ago');
+    // 365.25 here against the 365 in the test above put a record exactly a
+    // year old between the two and printed "0 years ago". One year, one number.
+    var y = Math.floor(days / 365); return y + (y === 1 ? ' year ago' : ' years ago');
   }
   function none(){ return '<span class="none">&mdash;</span>'; }
   // an identifier may break before "@" or after ". / - ? & =", never inside a word
@@ -1139,12 +1204,13 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   var built = false;
   function buildTables(){
     if (built) return;
-    var d8 = loadPayload();
-    if (!d8.length) return;   // parser has not reached the payload yet; try again later
+    // the blocks sit below this script, so wait until the parser has them all
+    if (totals.length && !document.getElementById('payload-' + totals.length)) return;
     built = true;
     [].slice.call(secs.querySelectorAll('.rowbox')).forEach(function(box){
-      var i = Number(box.getAttribute('data-i')), d = d8[i], t = totals[i];
+      var i = Number(box.getAttribute('data-i')), t = totals[i];
       try {
+        var d = payloadFor(i);
         var rs = rows(d).slice(0, ROWLIMIT), total = n(t.name);
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
         // HIDE gates guessed columns only. COLS is curated by hand, and its
@@ -1187,14 +1253,16 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
 </script>
 HTMLTAIL
 
-echo '<script type="application/json" id="payload">['
-FIRST=1
+# One block per search, not one array holding all five. A single malformed
+# reply used to fail the one JSON.parse that fed every table, so one bad reply
+# emptied the whole report. Now it costs only its own table.
+I=0
 for f in "$TMP"/*.json; do
-  [ $FIRST -eq 1 ] || echo ','
-  FIRST=0
+  I=$((I+1))
+  printf '<script type="application/json" id="payload-%s">' "$I"
   cat "$f"
+  echo '</script>'
 done
-echo ']</script>'
 
 echo '</main></body></html>'
 } > "$OUT"
@@ -1202,8 +1270,16 @@ echo '</main></body></html>'
 
 echo ' done' >&2
 
-# full path, so nobody has to guess which folder they were standing in
-ABS="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
+# Full path, so nobody has to guess which folder they were standing in. When
+# the directory cannot be entered the cd printed an error and the subshell said
+# nothing, so ABS became "/name.html" and the summary reported that as the file
+# it had written - a path with no file at it. The report write just above failed
+# for the same reason, so say so and stop.
+if ! OUTDIR=$(cd "$(dirname "$OUT")" 2>/dev/null && pwd); then
+  echo "Could not write $OUT: there is no directory $(dirname "$OUT")." >&2
+  exit 1
+fi
+ABS="$OUTDIR/$(basename "$OUT")"
 
 # Chrome or Edge can print the report without opening a window
 CHROME=""
