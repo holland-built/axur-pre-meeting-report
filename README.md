@@ -178,9 +178,14 @@ every page, back to the summary.
 | `docs/redesign/` | An earlier look for the report, kept for reference |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
-The report's HTML lives once, in `axur-report.sh`. After editing it, run the
-generator or the other copies serve stale code:
+`axur-report.sh` holds the report's HTML. Two other files carry a copy of it:
+`axur-report.ps1`, and the download buttons in the guide.
+
+This command rewrites both copies from the shell script:
 
 ```bash
 python3 tools/build.py
 ```
+
+Run it every time you edit `axur-report.sh`. Skip it and those two files keep
+handing out the previous version of the report.
