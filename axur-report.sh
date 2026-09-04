@@ -379,7 +379,7 @@ collect_search() { # collect_search N
           # a real page beyond the cap is the one thing that means "there was more"
           [ "$P" -gt "$PAGECAP" ] && { PARTIAL=1; break; }
           PREVROW="$THISROW"
-          printf '%s' "$PG" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g' > "$TMP/$N.page$P"
+          printf '%s' "$PG" | sed -E 's#</#<\\/#g' > "$TMP/$N.page$P"
           PAGES=$((PAGES+1))
           P=$((P+1))
         done
@@ -391,10 +391,10 @@ collect_search() { # collect_search N
   {
     printf '{"name":"%s","query":"%s","total":%s,"reply":' \
       "$NAME" "$(printf '%s' "$QUERY" | sed 's/"/\\"/g')" "${TOTAL:-null}"
-    # Strip the password before it reaches the report file. The pattern allows
-    # space around the colon and escaped quotes inside the value: without both,
-    # "password": "secret" slipped through untouched.
-    printf '%s' "${OUTJ:-null}" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g'
+    # The reply goes into the report as it arrived, passwords included. Only
+    # "</" is rewritten, because it would end the script block the payload sits
+    # in. See the note on the cover for what that means for handling the file.
+    printf '%s' "${OUTJ:-null}" | sed -E 's#</#<\\/#g'
     printf '}'
   } > "$TMP/$N.json"
 }
@@ -746,6 +746,10 @@ cat <<HTMLHEAD
  .date{font-family:var(--mono);font-size:12.5px;white-space:nowrap;color:var(--body);font-variant-numeric:tabular-nums}
  .date .ago{display:block;font-family:var(--sans);font-size:11.5px;color:var(--faint);white-space:normal}
  .none{color:var(--faint)}
+ /* the live password: monospace so it can be read and typed back exactly,
+    and breakable, because some of them are long */
+ .secret{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+         overflow-wrap:anywhere;word-break:break-word}
  .flag{display:inline-flex;align-items:flex-start;gap:6px}
  .flag::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none;margin-top:5px}
  .flag.r::before{background:var(--red)} .flag.a::before{background:var(--amber)} .flag.g::before{background:var(--green)}
@@ -860,7 +864,7 @@ cat <<HTMLHEAD
   <div id="metrics"></div>
 
   <div class="toc" id="toc"></div>
-  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Passwords are never included in this report.$CAVEAT</p>
+  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Leaked passwords are included in full.$CAVEAT</p>
 </div></div>
 
 <div class="wrap" id="sections"></div>
@@ -871,9 +875,9 @@ cat <<HTMLHEAD
       <rect x="4" y="10.5" width="16" height="10" rx="2.4" stroke="#c9362d" stroke-width="1.7"/>
       <path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9" stroke="#c9362d" stroke-width="1.7" stroke-linecap="round"/>
     </svg>
-    <div><b>Passwords withheld</b>
-      Axur stores leaked passwords in clear text. This report shows the account and the site it was used on,
-      never the password itself.</div>
+    <div><b>This file contains live passwords</b>
+      The Password column is the real one, as Axur holds it. Every account listed here should be reset.
+      Send this file the way you would send the credentials themselves, and delete it when the reset is done.</div>
   </div>
   <footer>External attack surface (servers and services reachable from the internet) is a separate download:
     one.axur.com/easm, Exposures, Download all.</footer>
@@ -898,7 +902,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
 (function(){
   'use strict';
   var ROWLIMIT = ROWSVALUE;
-  var HIDE = /password|hash|datahubId|^id$/i;   // never print a leaked password
+  var HIDE = /datahubId|^id$/i;   // internal identifiers, not evidence
   var PREF = ['user','accessUrl','accessHost','sourceName','leakDisplayName',
               'domain','url','sourceUrl','riskScore','impersonatedBrandsHigh',
               'contentType','domainCreationDate','detectionDate','sourceDate'];
@@ -985,6 +989,13 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       return '<span class="id">' + brk(host) + (path ? '<span class="p">' + brk(path) + '</span>' : '') + '</span>';
     },
     source: function(v){ return blank(v) ? none() : esc(SOURCE[v] || v); },
+    // The live password. esc() is what keeps a value like <img onerror=...>
+    // from becoming markup in the report, so it stays even though nothing is
+    // being withheld any more.
+    secret: function(v){
+      if (blank(v)) return none();
+      return '<span class="secret">' + esc(v) + '</span>';
+    },
     pwd: function(v){
       if (blank(v)) return none();
       return str(v).toUpperCase() === 'PLAIN' ? '<span class="flag r">Readable</span>' : '<span class="flag">Hashed</span>';
@@ -1065,18 +1076,20 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
      Reading order: the thing itself, then what it is for or who it pretends to be, then how bad, then when. */
   var COLS = {
     'Leaked credentials': [
-      {k:'user',          h:'Account',                 f:'account', w:30, wp:24},
-      {k:'accessHost',    h:'Password used on',        f:'site',    w:25, wp:22},
-      {k:'sourceName',    h:'Where it was found',      f:'source',  w:15, wp:13},
-      {k:'passwordType',  h:'Password',                f:'pwd',     w:10, wp:12},
-      {k:'sourceDate',    h:'Leaked',                  f:'date',    w:10, wp:14.5},
-      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:10, wp:14.5} ],
+      {k:'user',          h:'Account',                 f:'account', w:24, wp:20},
+      {k:'password',      h:'Password',                f:'secret',  w:16, wp:16},
+      {k:'passwordType',  h:'Kind',                    f:'pwd',     w:12, wp:12},
+      {k:'accessHost',    h:'Password used on',        f:'site',    w:20, wp:18},
+      {k:'sourceName',    h:'Where it was found',      f:'source',  w:12, wp:11},
+      {k:'sourceDate',    h:'Leaked',                  f:'date',    w:8,  wp:11},
+      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:8,  wp:12} ],
     'In plaintext': [
-      {k:'user',          h:'Account',                 f:'account', w:30, wp:28},
-      {k:'accessHost',    h:'Password used on',        f:'site',    w:32, wp:26},
-      {k:'sourceName',    h:'Where it was found',      f:'source',  w:18, wp:16},
-      {k:'sourceDate',    h:'Leaked',                  f:'date',    w:10, wp:15},
-      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:10, wp:15} ],
+      {k:'user',          h:'Account',                 f:'account', w:26, wp:24},
+      {k:'password',      h:'Password',                f:'secret',  w:16, wp:15},
+      {k:'accessHost',    h:'Password used on',        f:'site',    w:24, wp:20},
+      {k:'sourceName',    h:'Where it was found',      f:'source',  w:15, wp:14},
+      {k:'sourceDate',    h:'Leaked',                  f:'date',    w:9,  wp:13},
+      {k:'detectionDate', h:'Found by Axur',           f:'date',    w:10, wp:14} ],
     'Phishing pages': [
       {k:'reference',     h:'Page',                    f:'site',    w:27, wp:24},
       {k:'impersonatedBrandsHigh', h:'Pretends to be', f:'brands',  w:15, wp:14},
@@ -1221,9 +1234,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
         var d = payloadFor(i);
         var rs = rows(d).slice(0, ROWLIMIT), total = n(t.name);
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
-        // HIDE gates guessed columns only. COLS is curated by hand, and its
-        // passwordType entry is the readable-vs-hashed signal the sanitiser
-        // deliberately preserves; filtering it here silently dropped it.
+        // HIDE gates guessed columns only; COLS is curated by hand.
         var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
         // "Back to the top" has to be reachable from any page, and the PDF has
         // no bookmark pane: Chrome writes no outline. A fixed element is painted

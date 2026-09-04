@@ -149,7 +149,9 @@ writes the company names instead.
 ## What you get
 
 A summary page, the records behind each number, and a PDF. It opens when it is
-done. Passwords are never written to the file.
+done. The leaked passwords are written to the file in full, so treat the report
+as you would treat the credentials themselves: send it the way you would send a
+password, and delete it once the accounts are reset.
 
 Read the Impersonated brand column before you send it: that search matches any
 brand whose name contains the word, so a one-word brand picks up

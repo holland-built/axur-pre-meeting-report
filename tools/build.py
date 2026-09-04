@@ -344,16 +344,6 @@ function Complete-Search($job) {
     $total = $kept.Count   # the tile and the table below it must agree
   }
 
-  # never let a leaked password reach the report file
-  # Any field whose NAME carries password or hash goes, whatever its type: the
-  # hashes, the length and the passwordHas* flags together are a recipe for
-  # guessing the password this report says it does not include. passwordType is
-  # kept, because PLAIN vs HASH is the point of one of the five searches.
-  foreach ($r in $found) {
-    foreach ($n in @($r.PSObject.Properties.Name)) {
-      if ($n -ne 'passwordType' -and $n -match '(?i)password|hash') { $r.$n = '[removed]' }
-    }
-  }
   $keep = @($found | Select-Object -First $Rows)
   $reply = @{ result = @{ status = @{ totalResults = $total }; data = $keep } }
   [pscustomobject]@{
