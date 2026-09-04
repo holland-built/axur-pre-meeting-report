@@ -9,6 +9,10 @@ You need an Axur API key, and Chrome or Edge for the PDF.
 Nothing to install: the Mac script uses curl, sed and perl, all of which ship
 with macOS, and the Windows script is PowerShell only.
 
+The Windows script has been run end to end on PowerShell 7.6.5. It has not been
+run on Windows PowerShell 5.1, the one `powershell.exe` starts, so treat that as
+untested rather than supported.
+
 ## Get a key
 
 In Axur: gear icon, **My preferences**, **API keys**, Generate New Key.
@@ -47,9 +51,11 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 | `--exclude-file F` | `-ExcludeFile` | Same, read from a file or CSV |
 | `--logo SRC` | `-Logo` | Use this image instead of looking one up. A file or a URL |
 | `--no-logo` | `-NoLogo` | Look up nothing. The names are written instead |
+| `--brandfetch ID` | _(none)_ | A Brandfetch client id, if the plain lookup is rate limited |
 | `--out FILE` | `-Out` | Output file |
 | `--no-pdf` | `-NoPdf` | Write the HTML only |
 | `--no-open` | `-NoOpen` | Print the path instead of opening it |
+| `--debug` | `-ShowRaw` | Print the raw replies |
 
 ## Save customer settings
 
@@ -157,6 +163,10 @@ Read the Impersonated brand column before you send it: that search matches any
 brand whose name contains the word, so a one-word brand picks up
 unrelated companies that share it.
 
+The PDF has no bookmark pane. Chrome writes page breaks and working links but no
+outline, so every section table carries a small "Top" link in its header, on
+every page, back to the summary.
+
 ## Files
 
 | | |
@@ -165,6 +175,7 @@ unrelated companies that share it.
 | `axur-report.ps1` | The Windows script. Generated, do not edit by hand |
 | `docs/index.html` | The SE guide, with both scripts embedded in its download buttons |
 | `docs/hosting.md` | How to host the guide |
+| `docs/redesign/` | An earlier look for the report, kept for reference |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
 The report's HTML lives once, in `axur-report.sh`. After editing it, run the

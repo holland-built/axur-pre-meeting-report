@@ -36,6 +36,8 @@ PS_TEMPLATE = r"""<#
     -Logo SRC       use this for the customer logo instead of looking it up.
                     A file on disk, or a URL
     -NoLogo         do not look up any logo. The names are written instead
+    -DropOwn        drop the customer's own domain from the results. Their own
+                    sites match the searches but are not impersonating them
     -Out FILE       output file (default axur-report-<domain>.html)
     -NoPdf          write only the HTML
     -NoOpen         do not open the report when it is done
@@ -47,7 +49,7 @@ PS_TEMPLATE = r"""<#
 param(
   [string]$Brand, [string]$Domain, [string]$ApiKey, [string]$Config, [string]$SaveConfig,
   [int]$Rows = 50, [int]$Wait = 300, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
-  [string]$Logo, [switch]$NoLogo, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
+  [string]$Logo, [switch]$NoLogo, [switch]$DropOwn, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,6 +195,12 @@ $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
 # lowercased once here, because Test-Keep compares them against every field of
 # every row and $p.ToLower() inside that loop redid the work thousands of times
 $patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
+
+# The customer's own sites are not impersonating the customer, but the searches
+# match on the name, so their own domains come back as impersonation sites and
+# as lookalikes. -DropOwn takes them out. Not the default: any filter forces a
+# full page walk to recount, so a large result runs slower and stops at the cap.
+if ($DropOwn) { $patterns += $Domain.ToLower() }
 
 # A customer's own domains run to dozens, so take them from a file as well as
 # the command line. One per line, or the first column of a CSV. A "domain"
