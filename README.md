@@ -1,8 +1,8 @@
 # Axur pre-meeting report
 
-One script asks Axur what it knows about a prospect and writes the answer as a
-report you can send. It runs five searches and puts the counts on a cover page,
-with the records behind each one after it, and a PDF beside the HTML.
+One script asks Axur what it knows about a prospect. It writes a report you can
+send, as HTML and as a PDF: the counts on a cover page, the records behind each
+count after it.
 
 | The number | What it counts |
 |---|---|
@@ -12,39 +12,27 @@ with the records behind each one after it, and a PDF beside the HTML.
 | Lookalike domains | Names one character away from theirs |
 | Mail-enabled lookalikes | Of those, the ones that can already send mail |
 
-## Requirements
-
-An Axur API key, and Chrome or Edge for the PDF. Nothing else to install: the
-Mac script uses curl, sed and perl, which all ship with macOS, and the Windows
-script needs only PowerShell.
-
-> [!NOTE]
-> The Windows script has been run end to end on PowerShell 7.6.5. It has never
-> been run on Windows PowerShell 5.1, the one `powershell.exe` starts. Treat 5.1
-> as untested rather than supported.
-
-## Get a key
-
-In Axur: gear icon, **My preferences**, **API keys**, Generate New Key.
-Copy it once. Axur never shows it again.
+> [!WARNING]
+> The report holds the leaked passwords in clear text. Every account in it needs
+> a reset. Send the file the way you would send a password, and delete it after.
 
 ## Run it
 
-It asks for anything you leave off, and hides the key as you type.
+You need an Axur API key, and Chrome or Edge for the PDF. Nothing to install.
+The script asks for anything you leave off, and hides the key as you type.
 
-```bash
-bash axur-report.sh
-```
+| Platform | Command |
+|---|---|
+| Mac | `bash axur-report.sh` |
+| Windows | `powershell -ExecutionPolicy Bypass -File axur-report.ps1` |
 
-```powershell
-powershell -ExecutionPolicy Bypass -File axur-report.ps1
-```
+PowerShell 7.6.5 is tested end to end. Windows PowerShell 5.1 is not.
 
-Skip the questions:
+Get a key in Axur: gear icon, **My preferences**, **API keys**, Generate New
+Key. Axur shows it once.
 
-```bash
-bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
-```
+<details>
+<summary><b>Flags</b></summary>
 
 | Flag | PowerShell | What it does |
 |---|---|---|
@@ -67,120 +55,40 @@ bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
 | `--no-open` | `-NoOpen` | Print the path instead of opening it |
 | `--debug` | `-ShowRaw` | Print the raw replies |
 
-## Save customer settings
+</details>
 
-Keep the settings that stay the same from one meeting to the next in a simple
-config file:
+<details>
+<summary><b>Config file</b></summary>
+
+A config file carries the settings that stay the same between meetings.
+`--save-config customer.conf` writes one. `--config customer.conf` reads it.
+A flag on the command line beats the file. The script never stores the API key.
 
 ```text
 brand        = Larkspur Financial
 domain       = larkspurfinancial.com
-logo         = ~/logos/larkspur.png
 min-score    = 50
 exclude-file = ~/known/larkspur-owned.csv
-rows         = 100
 ```
 
-Then the next run is just the config flag; the script still prompts for the API
-key:
+</details>
 
-```bash
-bash axur-report.sh --config larkspur.conf
-```
+<details>
+<summary><b>Worth knowing</b></summary>
 
-```powershell
-powershell -ExecutionPolicy Bypass -File axur-report.ps1 -Config larkspur.conf
-```
+| Topic | Note |
+|---|---|
+| Filters | Filters touch the three domain searches only. A credential has no score. |
+| Filtered counts | The script recounts a filtered headline over the rows that survive, so the number and the table agree. |
+| `--wait` | `--wait` bounds each search. The script reports anything still running as "at least N", on the terminal and in the report. |
+| Impersonated brand | Read the Impersonated brand column before sending. That search matches any brand whose name contains the word. |
+| PDF bookmarks | The PDF has no bookmark pane, because Chrome writes no outline. Every table header carries a "Top" link instead. |
+| Windows | PowerShell 7.6.5 is tested end to end. Windows PowerShell 5.1 is not. |
 
-Command-line flags override the file, wherever `--config` or `-Config` appears.
-Unknown keys produce a warning and are ignored. A missing config file stops the
-run with a clear message. The API key is never read from or written to a config
-file.
+</details>
 
-To create the file from a successful command, add `--save-config larkspur.conf`
-(PowerShell: `-SaveConfig larkspur.conf`). It saves `brand`, `domain`, `logo`,
-`min-score`, `exclude-file`, and `rows`; run-control choices such as opening the
-report or making a PDF stay on the command line.
-
-## Dropping rows you already know about
-
-A customer's own `.au` domain is not a lookalike, and a score of 12 is noise.
-Both flags take them out:
-
-```bash
-bash axur-report.sh --domain customer.com --min-score 50 --exclude ".au,partner.com"
-```
-
-A customer's own domains run to dozens, so keep them in a file instead of on
-the command line. One per line, or the first column of a CSV — a `domain`
-header row is skipped, so a sheet exported from Excel works as it is, and `#`
-starts a comment:
-
-```
-domain,note
-xyz.com,ours
-.au,customer region
-partner.co.uk,"reseller, agreed"
-```
-
-```bash
-bash axur-report.sh --domain customer.com --exclude-file known-good.csv
-```
-
-`--exclude` can be given more than once, and adds to whatever the file holds.
-
-The headline number is recounted over the rows that survive, so the count and
-the table below it always agree. To count over the whole result rather than the
-first page, the script walks the pages while a filter is on. If it reaches its
-page cap it says so on the terminal and in the report footer, and that count
-came from a partial pull.
-
-The customer's own sites match these searches without impersonating anyone.
-`--drop-own` removes them. It is not the default, because any filter forces the
-full page walk.
-
-## Counts that are still climbing
-
-Axur answers with a total long before it has finished searching. The script
-waits for the search to report itself finished, up to `--wait` seconds, and
-prints "at least N" for any that had not. Those also carry a line in the report
-footer, so the customer is not shown a fraction as if it were the whole. A large
-tenant needs a longer wait.
-
-Filters only touch the three domain searches. A leaked credential has no score
-and no domain to exclude on.
-
-## Logos
-
-The cover looks the customer's logo up by domain. When that finds nothing, or
-finds the wrong thing, hand it one:
-
-```bash
-bash axur-report.sh --domain customer.com --logo ~/Desktop/customer-logo.png
-```
-
-It takes a URL just as happily, and `--no-logo` skips the lookup altogether and
-writes the company names instead.
-
-## What you get
-
-A summary page, the records behind each number, and a PDF. It opens when it is
-done.
-
-> [!WARNING]
-> The leaked passwords are written to the report in full. Treat the file as you
-> would treat the credentials themselves: every account in it needs a reset, send
-> it the way you would send a password, and delete it once the resets are done.
-
-Read the Impersonated brand column before you send it: that search matches any
-brand whose name contains the word, so a one-word brand picks up
-unrelated companies that share it.
-
-The PDF has no bookmark pane. Chrome writes page breaks and working links but no
-outline, so every section table carries a small "Top" link in its header, on
-every page, back to the summary.
-
-## Files
+<details>
+<summary><b>Files</b></summary>
 
 | Path | What it is |
 |---|---|
@@ -191,10 +99,12 @@ every page, back to the summary.
 | `docs/redesign/` | An earlier look for the report, kept for reference |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
-`axur-report.sh` holds the report's HTML, and two files carry a copy of it:
-`axur-report.ps1`, and the guide's download buttons. Rebuild both after every
-edit to the shell script, or they keep handing out the previous report.
+`axur-report.sh` holds the report's HTML. `tools/build.py` generates
+`axur-report.ps1` and the guide's download buttons from it. Rebuild both after
+every edit:
 
 ```bash
 python3 tools/build.py
 ```
+
+</details>
