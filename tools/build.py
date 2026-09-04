@@ -41,7 +41,7 @@ PS_TEMPLATE = r"""<#
     -NoOpen         do not open the report when it is done
     -ShowRaw        show the raw replies
 
-  This file is generated from axur-report.sh by build-ps1.py. Edit the HTML
+  This file is generated from axur-report.sh by tools/build.py. Edit the HTML
   there, not here, then re-run the generator.
 #>
 param(

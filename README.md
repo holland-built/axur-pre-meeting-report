@@ -165,8 +165,8 @@ unrelated companies that share it.
 | `docs/hosting.md` | How to host the guide |
 | `tools/build.py` | Rebuilds the PowerShell and the guide's download buttons |
 
-The report's HTML lives once, in `axur-report.sh`. After editing it, run both
-generators or the other copies serve stale code:
+The report's HTML lives once, in `axur-report.sh`. After editing it, run the
+generator or the other copies serve stale code:
 
 ```bash
 python3 tools/build.py

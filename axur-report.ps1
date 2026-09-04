@@ -22,7 +22,7 @@
     -NoOpen         do not open the report when it is done
     -ShowRaw        show the raw replies
 
-  This file is generated from axur-report.sh by build-ps1.py. Edit the HTML
+  This file is generated from axur-report.sh by tools/build.py. Edit the HTML
   there, not here, then re-run the generator.
 #>
 param(
@@ -387,31 +387,7 @@ $head = @'
  :focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:3px}
  .wrap{max-width:1180px;margin:0 auto;padding:0 40px}
 
- /* =================== page one: the contents ===================
-    Chrome's --print-to-pdf writes real page breaks and working internal links
-    but no bookmarks, so a reader who opens the PDF gets no outline pane and no
-    way to jump. A contents page is what a printed report has always used for
-    that, and unlike a sticky rail it still works once the page stops moving. */
- .contents{background:var(--black);color:#fff;padding:44px 0 40px;
-           background-image:radial-gradient(900px 420px at 92% -20%,rgba(0,226,236,.12),transparent 60%)}
- .contents h2{font-size:26px;font-weight:600;letter-spacing:-.3px;margin:0}
- .contents .brand{text-transform:capitalize}
- .contents .csub{margin:6px 0 0;font-size:13.5px;color:#aab1b8;font-family:var(--mono)}
- .contents ol{list-style:none;margin:22px 0 0;padding:0;counter-reset:c}
- .contents li{counter-increment:c;border-top:1px solid #2c3640}
- .contents li:last-child{border-bottom:1px solid #2c3640}
- .contents a{display:flex;align-items:baseline;gap:12px;padding:11px 2px;
-             color:#e8ebee;text-decoration:none;font-size:15px}
- .contents a:hover{color:var(--cyan)}
- .contents a::before{content:counter(c,decimal-leading-zero);font-family:var(--mono);
-                     font-size:12px;color:var(--cyan);flex:none;width:22px}
- /* the leader is drawn, not typed, so it cannot wrap or fall out of step */
- .contents .dots{flex:1;border-bottom:1px dotted #4a545c;transform:translateY(-4px)}
- .contents .cnt{font-family:var(--mono);font-size:14px;color:#fff;
-                font-variant-numeric:tabular-nums;flex:none}
- .contents .cfoot{margin:16px 0 0;font-size:12px;color:#8f989f}
-
- /* =================== page two: the cover =================== */
+ /* =================== page one: the cover =================== */
  .cover{background:var(--black);color:#fff;padding:56px 0 48px;
         background-image:radial-gradient(1100px 520px at 88% -10%,rgba(0,226,236,.14),transparent 62%)}
  /* the marks are 144px, so the gap under them has to carry that weight */
@@ -479,6 +455,10 @@ $head = @'
  .strip .up{margin-left:auto;text-decoration:none;color:var(--ink);font-weight:500;
             border:1px solid var(--steel);border-radius:99px;padding:4px 12px;background:var(--paper)}
  .strip .up:hover{border-color:var(--ink)}
+ /* Paper only. The PDF has no bookmark pane - Chrome writes no outline - and
+    the sticky strip stops sticking the moment the page stops moving, so a
+    reader ten pages in had no way back. On screen the strip already does this. */
+ .totop{display:none}
  .bar{height:3px;background:var(--line);margin-bottom:26px}
  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--cyan))}
  .section h2{font-size:24px;font-weight:600;letter-spacing:-.4px;margin:0 0 6px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
@@ -571,15 +551,6 @@ $head = @'
    .cover .foot{font-size:10.5px;margin-top:6px}
    .flag{overflow-wrap:normal}
    col{width:var(--wp,var(--w))}
-   .contents{page:cover;min-height:297mm;padding:20mm 0 12mm;break-after:page;
-             display:flex;flex-direction:column}
-   .contents .wrap{padding:0 13mm;margin:0;width:100%;flex:1;
-                   display:flex;flex-direction:column}
-   .contents h2{font-size:20px}
-   .contents a{padding:9px 2px;font-size:13px}
-   .contents li{break-inside:avoid}
-   /* the note sits on the foot of the page, not under the last line */
-   .contents .cfoot{margin-top:auto;padding-top:12mm}
    .section{break-before:page;padding-bottom:0}
    .strip{position:static;height:auto;padding:0 0 8px}
    .strip .up{display:none}
@@ -591,20 +562,14 @@ $head = @'
    thead{display:table-header-group}
    tr{break-inside:avoid}
    .trail{display:none}
+   th .totop{display:inline;float:right;font-weight:400;text-transform:none;
+             letter-spacing:0;color:var(--mute);text-decoration:none}
    .rowbox{min-height:0!important}
    .note{break-inside:avoid;margin-top:18px}
    footer{padding-top:14px}
  }
 </style></head><body>
 <main data-brand="{{BRAND}}" data-domain="{{DOMAIN}}" data-scan="{{DATE_ISO}}">
-
-<div class="contents" id="contents"><div class="wrap">
-  <p class="kicker">Contents</p>
-  <h2>Threat exposure &middot; <span class="brand">{{BRAND}}</span></h2>
-  <p class="csub">{{DOMAIN}} &middot; scanned {{DATE_LONG}}</p>
-  <ol id="clist"></ol>
-  <p class="cfoot">Every line is a link. The summary is on the next page.</p>
-</div></div>
 
 <div class="cover" id="top"><div class="wrap">
   <div class="top">
@@ -932,12 +897,6 @@ $tail = @'
       '</div></div>';
   }).join('');
 
-  // Built from the same totals as the cover, so the two can never disagree.
-  document.getElementById('clist').innerHTML = totals.map(function(t, i){
-    return '<li><a href="#s' + (i + 1) + '">' + heading(t.name) +
-      '<span class="dots"></span><span class="cnt">' + show(n(t.name)) + '</span></a></li>';
-  }).join('');
-
   document.getElementById('toc').innerHTML = '<div class="h">The records behind the numbers</div>' +
     totals.map(function(t, i){ return '<span class="n">' + pad2(i + 1) + '</span><a href="#s' + (i + 1) + '"><span class="n">' + pad2(i + 1) +
       '&ensp;</span>' + heading(t.name) + ' <span class="n">&middot; ' + show(n(t.name)) + '</span></a>'; }).join('');
@@ -961,7 +920,6 @@ $tail = @'
     s.innerHTML =
       '<div class="strip"><span class="n"><b>' + no + '</b> / ' + pad2(TOTAL) + '</span>' +
         '<span class="name">' + heading(t.name) + '</span><span class="cust">' + esc(Brand) + ' &middot; threat exposure</span>' +
-        '<a class="up" href="#contents">&uarr; Contents</a>' +
         '<a class="up" href="#top">&uarr; Summary</a></div>' +
       '<div class="bar"><i style="width:' + Math.round((i + 1) / TOTAL * 100) + '%"></i></div>' +
       '<h2><span class="num">' + no + '</span>' + heading(t.name) +
@@ -969,8 +927,7 @@ $tail = @'
       (MEANS[t.name] ? '<p class="means">' + MEANS[t.name] + '</p>' : '') +
       '<div class="query"><span>Axur search</span>' + esc(t.query) + '</div>' +
       '<div class="rowbox" data-i="' + i + '"' + (reserve ? ' style="min-height:' + reserve + 'px"' : '') + '></div>' +
-      '<div class="trail"><a class="up" href="#contents">&uarr; Contents</a>' +
-      '<a class="up" href="#top">&uarr; Back to the summary</a>' +
+      '<div class="trail"><a class="up" href="#top">&uarr; Back to the summary</a>' +
       (i + 1 < TOTAL ? '<a class="next" href="#s' + (i + 2) + '">' + pad2(i + 2) + ' &middot; ' + heading(totals[i + 1].name) + ' &rarr;</a>'
                      : '<a class="next" href="#top">Back to the summary &uarr;</a>') + '</div>';
     secs.appendChild(s);
@@ -994,9 +951,17 @@ $tail = @'
         // passwordType entry is the readable-vs-hashed signal the sanitiser
         // deliberately preserves; filtering it here silently dropped it.
         var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
+        // "Back to the top" has to be reachable from any page, and the PDF has
+        // no bookmark pane: Chrome writes no outline. A fixed element is painted
+        // once, not per page, because the cover claims its own named page. A
+        // table header is repeated on every page the table covers, so the link
+        // rides in the last header cell and lands on every page of every table.
+        var ths = cs.map(function(c){ return '<th>' + c.h + '</th>'; });
+        ths[ths.length - 1] = ths[ths.length - 1]
+          .replace('</th>', '<a class="totop" href="#top">&uarr; Top</a></th>');
         var html = '<table><colgroup><col style="--w:4%">' +
           cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') +
-          '</colgroup><thead><tr><th class="idx">#</th>' + cs.map(function(c){ return '<th>' + c.h + '</th>'; }).join('') + '</tr></thead><tbody>';
+          '</colgroup><thead><tr><th class="idx">#</th>' + ths.join('') + '</tr></thead><tbody>';
         rs.forEach(function(r, ri){
           html += '<tr><td class="idx">' + (ri + 1) + '</td>' +
             cs.map(function(c){ return '<td>' + cell(c.f, r[c.k], r) + '</td>'; }).join('') + '</tr>';
