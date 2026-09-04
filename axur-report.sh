@@ -128,12 +128,14 @@ DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z' | sed 's#^[a-z]*://##; s/^www\./
 LABEL=$(printf '%s' "$DOMAIN" | cut -d. -f1)
 [ -z "$OUT" ] && OUT="axur-report-$LABEL.html"
 
-# The cover writes the brand and the domain into HTML attributes. A quote in
+# The cover writes the brand, the domain and the two logo sources into HTML
+# attributes. A quote in
 # either one closes the attribute early and the rest of the value becomes
 # markup, so a brand of  Larkspur" onload="...  lands as a live event handler in
-# the customer's report. The brand is whatever the SE typed, and a --config file
-# is read without validation, so escape here and put the escaped copies in the
-# page. The searches and the terminal keep the value as it was given.
+# the customer's report. The brand is whatever the SE typed, a --config file is
+# read without validation, and the logo's content type comes from a third party's
+# header, so escape here and put the escaped copies in the page. The searches and
+# the terminal keep the value as it was given.
 html_escape() { # html_escape TEXT -> the same text, safe inside an attribute
   printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
 }
@@ -262,14 +264,12 @@ fi
 # email and must not tell a third party who it is about. A missing --logo file
 # did the same. Empty src, and onerror writes the name, as the Windows script
 # has always done.
-LOGO="$LOGO_DATA"
-OURS="$OURS_DATA"
 if [ -n "$NOLOGO" ]; then :
 elif [ -n "$LOGO_DATA" ]; then echo " ... got $BRAND"
 elif [ -n "$LOGOSRC" ]; then echo " ... could not read $LOGOSRC, the name will be written instead"
 else echo " ... none for $DOMAIN, the name will be written instead"; fi
-LOGO_H=$(html_escape "$LOGO")
-OURS_H=$(html_escape "$OURS")
+LOGO_H=$(html_escape "$LOGO_DATA")
+OURS_H=$(html_escape "$OURS_DATA")
 
 # Axur runs a search on its own side once it is started, so the five overlap if
 # they are all started first. Waiting for them one at a time cost the sum of
@@ -352,35 +352,37 @@ collect_search() { # collect_search N
   PAGES=1; PARTIAL=""
   case "$NAME" in
     "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
+      # Say once, here, that this search is one the filters apply to. The filter
+      # step used to read the name back out of the reply with sed and test it
+      # against a second copy of this list: if the sed missed, the name came out
+      # empty, the search was skipped, and it shipped unfiltered without the
+      # failure being noticed.
+      : > "$TMP/$N.filterable"
       if [ -n "$MINSCORE$EXCLUDE" ] && [ -n "$TOTAL" ]; then
         # Compare each page with the one before it, not with page one. An API
         # that clamps an out-of-range page to the last page repeats those rows
         # for every page past the end: matched against page one only, the walk
         # ran to the cap, kept 37 copies of the last page and counted them all,
         # so the number on the cover came out several times the truth.
+        # The walk runs one page past the cap. Stopping at the cap and running
+        # out of pages look the same from inside the loop, so a result of
+        # exactly PAGECAP pages used to report itself truncated. Asking for one
+        # more page settles it, and asking inside the loop means the fetch and
+        # the freshness test are written once rather than twice.
         PREVROW=$(printf '%s' "$OUTJ" | cksum)
         P=2
-        while [ "$P" -le "$PAGECAP" ]; do
+        while [ "$P" -le $((PAGECAP + 1)) ]; do
           PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH")
           printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' || break
           THISROW=$(printf '%s' "$PG" | cksum)
           [ "$THISROW" = "$PREVROW" ] && break
+          # a real page beyond the cap is the one thing that means "there was more"
+          [ "$P" -gt "$PAGECAP" ] && { PARTIAL=1; break; }
           PREVROW="$THISROW"
           printf '%s' "$PG" | sed -E 's#</#<\\/#g; s/"passwordType"/"__PWTYPE__"/g; s/"([A-Za-z0-9_]*([Pp]assword|[Hh]ash)[A-Za-z0-9_]*)"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*|true|false|null)/"\1":"[removed]"/g; s/"__PWTYPE__"/"passwordType"/g' > "$TMP/$N.page$P"
           PAGES=$((PAGES+1))
           P=$((P+1))
         done
-        # Stopping at the cap and running out of pages look the same from
-        # inside the loop, so a result of exactly PAGECAP pages was reported as
-        # truncated. Ask for one more page: only a page with new rows on it
-        # means there really was more than we pulled.
-        if [ "$P" -gt "$PAGECAP" ]; then
-          PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH")
-          if printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' &&
-             [ "$(printf '%s' "$PG" | cksum)" != "$PREVROW" ]; then
-            PARTIAL=1
-          fi
-        fi
         [ "$PAGES" -gt 1 ] && printf '  %-26s pulled %s pages for filtering\n' "$NAME" "$PAGES"
       fi ;;
   esac
@@ -486,16 +488,16 @@ ROW: for my $r (@rows) {
     my ($sc) = $r =~ /"riskScore"\s*:\s*"?([0-9.]+)"?/;
     next ROW if defined $sc && $sc + 0 < $min + 0;
   }
-  for my $pat (@pats) {
-    my $q = quotemeta $pat;
-    # Match the pattern anywhere in a field that names a site. The tables for
-    # phishing pages and mail-enabled lookalikes name the site in "reference",
-    # which was not on this list, so excluding a domain the SE could read in
-    # the table did nothing at all.
-    for my $f (qw(domain url sourceUrl accessHost reference renderedReference host accessUrl)) {
-      my ($v) = $r =~ /"$f"\s*:\s*"([^"]*)"/;
-      next unless defined $v;
-      next ROW if $v =~ /$q/i;
+  # Match a pattern anywhere in a field that names a site. The tables for
+  # phishing pages and mail-enabled lookalikes name the site in "reference",
+  # which was not on this list, so excluding a domain the SE could read in the
+  # table did nothing at all. Read the fields once, not once per pattern: the
+  # values do not change between patterns, and the scan is over the whole row.
+  for my $f (qw(domain url sourceUrl accessHost reference renderedReference host accessUrl)) {
+    my ($v) = $r =~ /"$f"\s*:\s*"([^"]*)"/;
+    next unless defined $v;
+    for my $pat (@pats) {
+      next ROW if $v =~ /\Q$pat\E/i;
     }
   }
   push @keep, $r;
@@ -522,25 +524,21 @@ fi
 # report believing it was filtered. Name the searches that failed and exit.
 if [ -n "$MINSCORE$EXCLUDE" ]; then
   printf 'Applying filters... '
-  FILTER_FAILED=""
-  for f in "$TMP"/*.json; do
-    NAME=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$f" | head -1)
-    case "$NAME" in
-      "Phishing pages"|"Lookalike domains"|"Mail-enabled lookalikes")
-        B=$(basename "$f" .json)
-        if /usr/bin/perl "$TMP/filter.pl" "$MINSCORE" "$EXCLUDE" "$f" "$TMP/$B".page* \
-             2>"$TMP/$B.kept" > "$f.f" && [ -s "$f.f" ]; then
-          mv "$f.f" "$f"
-        else
-          rm -f "$f.f"
-          FILTER_FAILED="$FILTER_FAILED
-  $NAME"
-        fi ;;
-    esac
+  for m in "$TMP"/*.filterable; do
+    [ -e "$m" ] || break
+    B=$(basename "$m" .filterable)
+    if /usr/bin/perl "$TMP/filter.pl" "$MINSCORE" "$EXCLUDE" "$TMP/$B.json" "$TMP/$B".page* \
+         2>/dev/null > "$TMP/$B.f" && [ -s "$TMP/$B.f" ]; then
+      mv "$TMP/$B.f" "$TMP/$B.json"
+    else
+      rm -f "$TMP/$B.f"
+      cat "$TMP/$B.name" >> "$TMP/filter-failed"; echo '' >> "$TMP/filter-failed"
+    fi
   done
-  if [ -n "$FILTER_FAILED" ]; then
+  if [ -s "$TMP/filter-failed" ]; then
     echo ''
-    echo "The filter could not read the reply for:$FILTER_FAILED" >&2
+    echo "The filter could not read the reply for:" >&2
+    sed 's/^/  /' "$TMP/filter-failed" >&2
     echo "Those counts and tables would go out unfiltered while the report says they" >&2
     echo "were filtered. Re-run, or drop --min-score and --exclude." >&2
     exit 1

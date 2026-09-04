@@ -190,7 +190,9 @@ if ($NoLogo) {
 }
 
 $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
-$patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ })
+# lowercased once here, because Test-Keep compares them against every field of
+# every row and $p.ToLower() inside that loop redid the work thousands of times
+$patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
 
 # A customer's own domains run to dozens, so take them from a file as well as
 # the command line. One per line, or the first column of a CSV. A "domain"
@@ -200,7 +202,7 @@ if ($ExcludeFile) {
   $fromFile = Get-Content $ExcludeFile | ForEach-Object {
     ($_ -replace '#.*', '').Split(',')[0].Trim().Trim('"').Trim("'")
   } | Where-Object { $_ -and $_ -notmatch '^(?i)domains?$' }
-  $patterns += $fromFile
+  $patterns += @($fromFile | ForEach-Object { $_.ToLower() })
   Write-Host "Excluding $($patterns.Count) patterns from $ExcludeFile"
 }
 $anyFilter = ($MinScore -or $patterns.Count)
@@ -218,14 +220,15 @@ function Test-Keep($row) {
       if ($n -lt [double]$MinScore) { return $false }
     }
   }
-  foreach ($p in $patterns) {
-    # Match a pattern anywhere in a field that names a site. The tables for
-    # phishing pages and mail-enabled lookalikes name the site in 'reference',
-    # which was not on this list, so excluding a domain the SE could read in
-    # the table did nothing at all.
-    foreach ($f in @('domain', 'url', 'sourceUrl', 'accessHost', 'reference', 'renderedReference', 'host', 'accessUrl')) {
-      $v = $row.$f
-      if ($v -and ([string]$v).ToLower().Contains($p.ToLower())) { return $false }
+  # Match a pattern anywhere in a field that names a site. This list is lifted
+  # from axur-report.sh by the builder; edit it there. Read each field once, not
+  # once per pattern: the value does not change between patterns.
+  foreach ($f in @(###EXCLUDEFIELDS###)) {
+    $v = $row.$f
+    if (-not $v) { continue }
+    $lower = ([string]$v).ToLower()
+    foreach ($p in $patterns) {
+      if ($lower.Contains($p)) { return $false }
     }
   }
   return $true
@@ -310,29 +313,27 @@ function Complete-Search($job) {
     # clamps an out-of-range page to the last page repeats those rows for every
     # page past the end, and matching page one only let the walk run to the cap
     # and count 37 copies of the last page.
-    $prevKey = if ($found.Count) { ($found | ConvertTo-Json -Depth 12 -Compress) } else { "" }
+    # The reply as it arrived is the page key. Serialising the parsed rows back
+    # to JSON to compare them re-did, for every one of up to 40 pages, the most
+    # expensive work in the loop; the raw text answers the same question.
+    $prevKey = $raw
+    # The walk runs one page past the cap. Stopping at the cap and running out
+    # of pages look the same from inside the loop, so a result of exactly
+    # PageCap pages used to report itself truncated. Asking for one more page
+    # settles it, and asking inside the loop means the fetch and the freshness
+    # test are written once rather than twice.
     $p = 2
-    while ($p -le $PageCap) {
+    while ($p -le $PageCap + 1) {
       try { $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content }
       catch { break }
-      $pd = $pg | ConvertFrom-Json
-      $pr = @($pd.result.data)
+      $pr = @(($pg | ConvertFrom-Json).result.data)
       if (-not $pr.Count) { break }
-      $thisKey = ($pr | ConvertTo-Json -Depth 12 -Compress)
-      if ($thisKey -eq $prevKey) { break }
-      $prevKey = $thisKey
+      if ($pg -eq $prevKey) { break }
+      # a real page beyond the cap is the one thing that means "there was more"
+      if ($p -gt $PageCap) { $script:partial += $name; break }
+      $prevKey = $pg
       $found += $pr
       $p++
-    }
-    # Stopping at the cap and running out of pages look the same from inside
-    # the loop, so a result of exactly PageCap pages was reported as truncated.
-    # Ask for one more page: only new rows mean there really was more.
-    if ($p -gt $PageCap) {
-      try {
-        $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content
-        $pr = @(($pg | ConvertFrom-Json).result.data)
-        if ($pr.Count -and ($pr | ConvertTo-Json -Depth 12 -Compress) -ne $prevKey) { $script:partial += $name }
-      } catch { }
     }
   }
 
@@ -485,6 +486,19 @@ def powershell_searches(sh_text):
             "$results = @($jobs | ForEach-Object { Complete-Search $_ })")
 
 
+def exclude_fields(sh_text):
+    """The fields an exclusion is matched against, taken from the shell script.
+
+    They were hand-copied into both scripts. That is the drift that
+    powershell_searches exists to stop: a fix reached one platform only, and
+    Windows quietly filtered on a different set of fields from the Mac.
+    """
+    m = re.search(r"^\s*for my \$f \(qw\(([^)]*)\)\) \{", sh_text, re.M)
+    if not m:
+        sys.exit("could not find the exclusion field list in axur-report.sh")
+    return ", ".join("'%s'" % f for f in m.group(1).split())
+
+
 def build_powershell(sh_text):
     lines = sh_text.split("\n")
     head = heredoc(lines, "cat <<HTMLHEAD", "HTMLHEAD")
@@ -492,10 +506,17 @@ def build_powershell(sh_text):
 
     # the shell interpolates these; PowerShell will .Replace() them instead
     for var, ph in (("BRAND_H", "{{BRAND}}"), ("DOMAIN_H", "{{DOMAIN}}"),
-                    ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}"),
-                    ("BRAND", "{{BRAND}}"), ("DOMAIN", "{{DOMAIN}}"),
-                    ("LOGO", "{{LOGO}}"), ("OURS", "{{OURS}}")):
+                    ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}")):
         head = head.replace("${%s}" % var, ph).replace("$" + var, ph)
+
+    # Only the escaped names belong in the page. Mapping the raw names here as
+    # well would quietly accept a bare $BRAND in the cover: the shell would emit
+    # it unescaped while PowerShell still ran it through ConvertTo-HtmlText, so
+    # the injection would come back on one platform with the build still green.
+    raw = [v for v in ("BRAND", "DOMAIN", "LOGO", "OURS") if "$" + v in head]
+    if raw:
+        sys.exit("HTMLHEAD still writes " + ", ".join("$" + v for v in raw)
+                 + " unescaped; use the _H name so the value is escaped once.")
 
     # The cover carries shell date expressions. PowerShell cannot run those, so
     # without this the customer's report literally reads $(date '+%d %B %Y').
@@ -516,7 +537,8 @@ def build_powershell(sh_text):
 
     ps = (PS_TEMPLATE.replace("###HTMLHEAD###", head)
                      .replace("###HTMLTAIL###", tail)
-                     .replace("###SEARCHES###", powershell_searches(sh_text)))
+                     .replace("###SEARCHES###", powershell_searches(sh_text))
+                     .replace("###EXCLUDEFIELDS###", exclude_fields(sh_text)))
     # Windows tooling is happier with CRLF
     PS1.write_bytes(ps.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
     return ps.count("\n") + 1
