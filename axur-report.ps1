@@ -902,7 +902,10 @@ $tail = @'
       try {
         var rs = rows(d).slice(0, ROWLIMIT), total = n(t.name);
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
-        var cs = (COLS[t.name] || guessCols(rs)).filter(function(c){ return !HIDE.test(c.k); });
+        // HIDE gates guessed columns only. COLS is curated by hand, and its
+        // passwordType entry is the readable-vs-hashed signal the sanitiser
+        // deliberately preserves; filtering it here silently dropped it.
+        var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
         var html = '<table><colgroup><col style="--w:4%">' +
           cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') +
           '</colgroup><thead><tr><th class="idx">#</th>' + cs.map(function(c){ return '<th>' + c.h + '</th>'; }).join('') + '</tr></thead><tbody>';

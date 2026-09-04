@@ -79,23 +79,28 @@ if [ -n "$CONFIG" ]; then
   done < "$CONFIG"
 fi
 
+# need_value: a flag that takes a value must actually have one. Without this,
+# "shift 2" with a single argument left does not shift and returns non-zero,
+# the status is discarded, and the while loop spins forever on a trailing flag.
+need_value() { [ "$2" -ge 2 ] || { echo "$1 needs a value." >&2; exit 1; }; }
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --config)     shift 2 ;;
-    --save-config) SAVECONFIG="$2"; shift 2 ;;
-    --brand)      BRAND="$2"; shift 2 ;;
-    --domain)     DOMAIN="$2"; shift 2 ;;
-    --key)        KEY="$2"; shift 2 ;;
-    --rows)       ROWS="$2"; shift 2 ;;
-    --wait)       WAIT="$2"; shift 2 ;;
-    --min-score)  MINSCORE="$2"; shift 2 ;;
-    --exclude)    EXCLUDE="${EXCLUDE:+$EXCLUDE,}$2"; shift 2 ;;
-    --exclude-file) EXCLUDEFILE="$2"; shift 2 ;;
-    --brandfetch) BFID="$2"; shift 2 ;;
-    --logo)       LOGOSRC="$2"; shift 2 ;;
+    --config)     need_value "$1" $#; shift 2 ;;
+    --save-config) need_value "$1" $#; SAVECONFIG="$2"; shift 2 ;;
+    --brand)      need_value "$1" $#; BRAND="$2"; shift 2 ;;
+    --domain)     need_value "$1" $#; DOMAIN="$2"; shift 2 ;;
+    --key)        need_value "$1" $#; KEY="$2"; shift 2 ;;
+    --rows)       need_value "$1" $#; ROWS="$2"; shift 2 ;;
+    --wait)       need_value "$1" $#; WAIT="$2"; shift 2 ;;
+    --min-score)  need_value "$1" $#; MINSCORE="$2"; shift 2 ;;
+    --exclude)    need_value "$1" $#; EXCLUDE="${EXCLUDE:+$EXCLUDE,}$2"; shift 2 ;;
+    --exclude-file) need_value "$1" $#; EXCLUDEFILE="$2"; shift 2 ;;
+    --brandfetch) need_value "$1" $#; BFID="$2"; shift 2 ;;
+    --logo)       need_value "$1" $#; LOGOSRC="$2"; shift 2 ;;
     --no-logo)    NOLOGO=1; shift ;;
     --drop-own)   DROPOWN=1; shift ;;
-    --out)        OUT="$2"; shift 2 ;;
+    --out)        need_value "$1" $#; OUT="$2"; shift 2 ;;
     --debug)      DEBUG=1; shift ;;
     --no-pdf)     NOPDF=1; shift ;;
     --no-open)    NOOPEN=1; shift ;;
@@ -1142,7 +1147,10 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       try {
         var rs = rows(d).slice(0, ROWLIMIT), total = n(t.name);
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
-        var cs = (COLS[t.name] || guessCols(rs)).filter(function(c){ return !HIDE.test(c.k); });
+        // HIDE gates guessed columns only. COLS is curated by hand, and its
+        // passwordType entry is the readable-vs-hashed signal the sanitiser
+        // deliberately preserves; filtering it here silently dropped it.
+        var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
         var html = '<table><colgroup><col style="--w:4%">' +
           cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') +
           '</colgroup><thead><tr><th class="idx">#</th>' + cs.map(function(c){ return '<th>' + c.h + '</th>'; }).join('') + '</tr></thead><tbody>';
