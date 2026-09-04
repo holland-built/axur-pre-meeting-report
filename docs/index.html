@@ -46,7 +46,7 @@ code.url{background:var(--accent-soft);border-color:#bfe0cd;color:var(--accent-d
         radial-gradient(50% 80% at 78% 0%, #f6e7c2 0%, rgba(246,231,194,0) 58%),
         radial-gradient(70% 100% at 100% 40%, #d9e9f7 0%, rgba(217,233,247,0) 60%),
         linear-gradient(180deg,#f4fbf6 0%, var(--canvas) 100%)}
-.wrap{max-width:760px;margin:0 auto;padding:0 var(--s-xl)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 var(--s-xl)}
 .band .wrap{padding-top:var(--s-huge);padding-bottom:var(--s-xxl)}
 .mark{height:22px;width:auto;display:block}
 /* the logo's wordmark is near-white, so it needs a dark chip to sit on */
@@ -135,7 +135,7 @@ code{font-family:var(--mono);font-size:14px;background:var(--soft);
 .os{display:flex;gap:var(--s-lg);margin-top:var(--s-md);font-size:15px}
 .os label{display:inline-flex;align-items:center;gap:7px;margin:0;color:var(--ink);cursor:pointer}
 .os input{width:16px;height:16px;min-height:0;padding:0;margin:0;accent-color:var(--accent);cursor:pointer}
-.opts{display:flex;flex-direction:column;gap:6px;margin-top:var(--s-md)}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:6px var(--s-sm);margin-top:var(--s-md)}
 .opt{display:grid;grid-template-columns:16px 1fr;column-gap:var(--s-md);align-items:start;
      padding:10px 14px 11px;border:1px solid var(--hairline);border-radius:var(--r-md);
      background:var(--canvas);cursor:pointer}
@@ -156,6 +156,7 @@ footer .wrap{padding-top:var(--s-xl);padding-bottom:var(--s-xl)}
 footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
 
 @media (max-width:640px){
+  .opts{grid-template-columns:1fr}
   .band .wrap{padding-top:var(--s-xxl)}
   h1{font-size:32px;letter-spacing:-0.64px}
   .fields{grid-template-columns:1fr}
@@ -356,7 +357,7 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
     var d = domainI.value.trim().toLowerCase()
               .replace(/^[a-z]+:\/\//,'').replace(/^www\./,'').split('/')[0];
     return { BRAND: b || 'BRAND', DOMAIN: d || 'customer.com',
-             LABEL: labelFrom(domainI.value) || 'brand' };
+             LABEL: labelFrom(domainI.value) || 'customer' };
   }
 
   function render(){
