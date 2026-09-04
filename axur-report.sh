@@ -153,12 +153,17 @@ DOMAIN_H=$(html_escape "$DOMAIN")
 
 # Brandfetch serves a real logo when the page sends a Referer. A file opened
 # straight off disk does not, so the cover writes the name out instead.
+# Our own mark is the Axur lockup, straight from axur.com, in the white version
+# because the cover is dark. It carries both names - "AXUR" and "An Infoblox
+# Company" - so one mark says who ran the scan and whose data it is. It is
+# fetched here and baked into the file, like the customer's, so the report makes
+# no request when the customer opens it.
+IB="https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
+OURS="https://cdn.prod.website-files.com/686fc31bac575ba9d246a49d/69cc2bab842c735eb0ad0cd1_02ddeb0576365499077ea973c3f145b9_LOGO_WHITE.svg"
 if [ -n "$BFID" ]; then
   LOGO="https://cdn.brandfetch.io/$DOMAIN/w/400/h/400?c=$BFID"
-  OURS="https://cdn.brandfetch.io/infoblox.com/w/400/h/400?c=$BFID"
 else
   LOGO="https://cdn.brandfetch.io/$DOMAIN/w/400/h/400"
-  OURS="https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
 fi
 
 # The customer's own sites are not impersonating the customer, but the searches
@@ -268,7 +273,7 @@ read_logo() { # read_logo PATH -> prints a data URI, or nothing
 printf 'Logo'
 if [ -n "$NOLOGO" ]; then
   echo ' ... skipped, the names will be written instead'
-  LOGO_DATA=""; OURS_DATA=""
+  LOGO_DATA=""; OURS_DATA=""; IB_DATA=""
 else
   if [ -n "$LOGOSRC" ] && [ -e "$LOGOSRC" ]; then
     LOGO_DATA=$(read_logo "$LOGOSRC")
@@ -278,6 +283,7 @@ else
     LOGO_DATA=$(fetch_logo "$LOGO" "$TMP/logo.bin")
   fi
   OURS_DATA=$(fetch_logo "$OURS" "$TMP/ours.bin")
+  IB_DATA=$(fetch_logo "$IB" "$TMP/ib.bin")
 fi
 # The cover shows a mark only when the bytes are in hand. Leaving the CDN
 # address in src meant --no-logo still put it in the file, so every reader of
@@ -291,6 +297,7 @@ elif [ -n "$LOGOSRC" ]; then echo " ... could not read $LOGOSRC, the name will b
 else echo " ... none for $DOMAIN, the name will be written instead"; fi
 LOGO_H=$(html_escape "$LOGO_DATA")
 OURS_H=$(html_escape "$OURS_DATA")
+IB_H=$(html_escape "$IB_DATA")
 
 # Axur runs a search on its own side once it is started, so the five overlap if
 # they are all started first. Waiting for them one at a time cost the sum of
@@ -701,9 +708,17 @@ cat <<HTMLHEAD
  .cover{background:var(--black);color:#fff;padding:56px 0 48px;
         background-image:radial-gradient(1100px 520px at 88% -10%,rgba(0,226,236,.14),transparent 62%)}
  /* the marks are 144px, so the gap under them has to carry that weight */
- .cover .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:64px;gap:24px}
+ /* The report is about the customer, so their mark leads. The two that made it
+    sit under it, on one line: Infoblox left, Axur right. */
+ .cover .top{display:flex;flex-direction:column;gap:26px;margin-bottom:56px}
+ .cover .top .who{display:flex;justify-content:center}
+ .cover .top .by{display:flex;align-items:center;justify-content:space-between;gap:24px;
+                 border-top:1px solid #2c3640;padding-top:22px}
+ .cover .top img.ax{width:230px;height:auto;display:block}
+ .cover .top .nm.sm{font-size:17px}
  /* Both marks are the same height: neither company outranks the other here. */
- .cover .top img.ib{height:144px;width:auto;display:block}
+ /* the lockup is 146x17, so width sets it; height would make it 1200px wide */
+ .cover .top img.ib{height:60px;width:auto;display:block}
  /* Brandfetch hands over 400x400, so the customer mark can carry the corner */
  .cover .top img.cust{height:144px;width:auto;max-width:420px;object-fit:contain;display:block;
         background:#fff;border-radius:14px;padding:14px 20px}
@@ -788,6 +803,9 @@ cat <<HTMLHEAD
     vertical-align:bottom;line-height:1.3}
  td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.4;overflow-wrap:anywhere}
  tbody tr:nth-child(even) td{background:var(--zebra)}
+ /* the three worst rows in a scored table, called out where the eye lands */
+ tbody tr.hi td{background:#fdf3f1}
+ tbody tr.hi td.idx{box-shadow:inset 3px 0 0 var(--red)}
  td.idx{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right;padding-left:4px;padding-right:6px;padding-top:10px;white-space:nowrap}
  th.idx{padding-left:4px;padding-right:6px}
  .id{font-family:var(--mono);font-size:12.5px;color:var(--ink)}           /* identifiers: accounts, domains, urls */
@@ -830,7 +848,8 @@ cat <<HTMLHEAD
    .card{grid-template-columns:1fr;row-gap:14px}
    .fig{border-right:0;border-bottom:1px solid #c5cbcd;padding:0 0 14px}
    .facts{flex-direction:column} .fact{border-right:0;border-bottom:1px solid #2c3640}
-   .cover .top img.ib{height:84px}
+   .cover .top img.ib{height:44px}
+   .cover .top img.ax{width:170px}
    .cover .top img.cust{height:84px;max-width:240px}
    table{table-layout:auto}
  }
@@ -839,10 +858,12 @@ cat <<HTMLHEAD
  @media print{
    @page{size:A4;margin:15mm 13mm 16mm}
    @page cover{margin:0}
-   .cover{page:cover;min-height:297mm;padding:8mm 0 6mm;break-after:page}
+   .cover{page:cover;min-height:297mm;padding:6mm 0 4mm;break-after:page}
    .cover .wrap{padding:0 13mm}
-   .cover .top{margin-bottom:26px}
-   .cover .top img.ib{height:96px} .cover .top img.cust{height:96px;max-width:300px;padding:10px 14px}
+   .cover .top{gap:8px;margin-bottom:12px}
+   .cover .top .by{padding-top:9px}
+   .cover .top img.ib{height:30px} .cover .top img.ax{width:132px}
+   .cover .top img.cust{height:54px;max-width:190px;padding:6px 9px}
    .cover .top .nm{font-size:20px}
    .wrap{padding:0;max-width:none}
    body{font-size:12.5px}
@@ -887,12 +908,17 @@ cat <<HTMLHEAD
 
 <div class="cover" id="top"><div class="wrap">
   <div class="top">
-    <div><img class="ib" src="$OURS_H" alt="Infoblox" referrerpolicy="origin"
-         onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span
-         class="nm">Infoblox</span></div>
-    <div><img class="cust" src="$LOGO_H" alt="$BRAND_H" referrerpolicy="origin"
+    <div class="who"><img class="cust" src="$LOGO_H" alt="$BRAND_H" referrerpolicy="origin"
          onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span
          class="nm">$BRAND_H</span></div>
+    <div class="by">
+      <div><img class="ib" src="$IB_H" alt="Infoblox" referrerpolicy="origin"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span
+           class="nm sm">Infoblox</span></div>
+      <div><img class="ax" src="$OURS_H" alt="Axur, an Infoblox company" referrerpolicy="origin"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span
+           class="nm sm">Axur</span></div>
+    </div>
   </div>
 
   <p class="kicker">Threat exposure &middot; Executive summary</p>
@@ -1184,7 +1210,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   function heading(name){ return TITLES[name] || name; }
   var MEANS = {
     'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
-    'In plaintext':'The subset of the previous table where the password was stored in readable form. These are the ones to reset first. The password itself is withheld from this report.',
+    'In plaintext':'The accounts from section 01 whose password was stored in readable form. These are the ones to reset first. They are not listed again here: section 01 puts them at the top of its table.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
     'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, but it is the first step in most of these attacks. Your own defensive registrations appear here too.',
     'Mail-enabled lookalikes':'The lookalike domains with mail records already published. A domain set up to receive mail is a domain someone is running as a mailbox, not parking, so these are the ones being used rather than merely bought.'
@@ -1244,6 +1270,29 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
     if (!Array.isArray(r) && d && Array.isArray(d.data)) r = d.data;
     return Array.isArray(r) ? r.filter(function(x){ return x && typeof x === 'object'; }) : [];
   }
+  // Highest risk first, and the top three marked. The rows that matter should
+  // be at the top of their section rather than wherever the API put them, and
+  // when the table is truncated it is the worst rows that survive. A search
+  // whose rows carry no score keeps the order Axur returned.
+  function riskOf(r){ var v = Number(r && r.riskScore); return (r && r.riskScore !== undefined && r.riskScore !== null && r.riskScore !== '' && !isNaN(v)) ? v : null; }
+  // A readable password is the one to reset first, so those rows lead. Same
+  // idea as byRisk, for the table that has no score.
+  function readableFirst(list){
+    function plain(r){ return r && String(r.passwordType || '').toUpperCase() === 'PLAIN' ? 0 : 1; }
+    if (!list.some(function(r){ return plain(r) === 0; })) return list;
+    return list.slice().sort(function(a, b){ return plain(a) - plain(b); });
+  }
+  function byRisk(list){
+    if (!list.some(function(r){ return riskOf(r) !== null; })) return list;
+    return list.slice().sort(function(a, b){
+      var x = riskOf(a), y = riskOf(b);
+      if (x === null && y === null) return 0;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return y - x;
+    });
+  }
+
   var secs = document.getElementById('sections');
   var TOTAL = totals.length;
   var ROWH = 46;   // a typical two-line row, so the page does not jump when the rows land
@@ -1282,7 +1331,21 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       var i = Number(box.getAttribute('data-i')), t = totals[i];
       try {
         var d = payloadFor(i);
-        var rs = rows(d).slice(0, ROWLIMIT), total = n(t.name);
+        // "In plaintext" is "Leaked credentials" with a filter on it, so its rows
+        // are already in the table above. Printing them twice made the reader
+        // check whether the two lists differed. The count still leads the cover;
+        // section 01 carries the evidence, with the readable ones at the top of
+        // it and the Kind column saying which is which.
+        var order = t.name === 'Leaked credentials' ? readableFirst : byRisk;
+        var rs = order(rows(d)).slice(0, ROWLIMIT), total = n(t.name);
+        if (t.name === 'In plaintext') {
+          box.innerHTML = '<p class="more">These ' + show(total) + ' accounts are the readable ' +
+            'ones from section 01. They are listed there, at the top of the table, marked ' +
+            '<span class="flag r">Readable</span> in the Kind column. They are not repeated here.</p>';
+          var c0 = secs.querySelector('.cnt[data-cnt="' + i + '"]');
+          if (c0) c0.innerHTML = '<b>' + show(total) + '</b> records &middot; listed in section 01';
+          return;
+        }
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
         // HIDE gates guessed columns only; COLS is curated by hand.
         var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
@@ -1298,7 +1361,8 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
           cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') +
           '</colgroup><thead><tr><th class="idx">#</th>' + ths.join('') + '</tr></thead><tbody>';
         rs.forEach(function(r, ri){
-          html += '<tr><td class="idx">' + (ri + 1) + '</td>' +
+          html += '<tr' + (ri < 3 && riskOf(r) !== null ? ' class="hi"' : '') +
+            '><td class="idx">' + (ri + 1) + '</td>' +
             cs.map(function(c){ return '<td>' + cell(c.f, r[c.k], r) + '</td>'; }).join('') + '</tr>';
         });
         html += '</tbody></table><p class="more">' +

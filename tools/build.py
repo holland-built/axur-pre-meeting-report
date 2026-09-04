@@ -192,14 +192,17 @@ function Read-Logo($path) {
 Write-Host -NoNewline "Logo"
 # PowerShell variable names are case-insensitive, so a local named $logo would
 # erase the $Logo parameter before anything reads it.
-$custData = ""; $oursData = ""
+$custData = ""; $oursData = ""; $ibData = ""
 if ($NoLogo) {
   Write-Host " ... skipped, the names will be written instead"
 } else {
   if ($Logo -and (Test-Path -LiteralPath $Logo)) { $custData = Read-Logo $Logo }
   elseif ($Logo)                                 { $custData = Get-Logo $Logo }
   else { $custData = Get-Logo "https://cdn.brandfetch.io/$Domain/w/400/h/400" }
-  $oursData = Get-Logo "https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
+  # our own mark is the Axur lockup from axur.com, white because the cover is
+  # dark; Infoblox sits beside it, so both companies are named
+  $oursData = Get-Logo "https://cdn.prod.website-files.com/686fc31bac575ba9d246a49d/69cc2bab842c735eb0ad0cd1_02ddeb0576365499077ea973c3f145b9_LOGO_WHITE.svg"
+  $ibData   = Get-Logo "https://cdn.brandfetch.io/infoblox.com/w/400/h/400"
   if ($custData) { Write-Host " ... got $Brand" }
   elseif ($Logo) { Write-Host " ... could not read $Logo, the name will be written instead" }
   else { Write-Host " ... none for $Domain, the name will be written instead" }
@@ -418,6 +421,7 @@ $tail = @'
 $now = Get-Date
 $head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAIN}}', (ConvertTo-HtmlText $Domain)).
               Replace('{{LOGO}}', (ConvertTo-HtmlText $custData)).Replace('{{OURS}}', (ConvertTo-HtmlText $oursData)).
+              Replace('{{IB}}', (ConvertTo-HtmlText $ibData)).
               Replace('{{DATE_ISO}}',   $now.ToString('yyyy-MM-dd')).
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
               Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy'))
@@ -546,14 +550,14 @@ def build_powershell(sh_text):
 
     # the shell interpolates these; PowerShell will .Replace() them instead
     for var, ph in (("BRAND_H", "{{BRAND}}"), ("DOMAIN_H", "{{DOMAIN}}"),
-                    ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}")):
+                    ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}"), ("IB_H", "{{IB}}")):
         head = head.replace("${%s}" % var, ph).replace("$" + var, ph)
 
     # Only the escaped names belong in the page. Mapping the raw names here as
     # well would quietly accept a bare $BRAND in the cover: the shell would emit
     # it unescaped while PowerShell still ran it through ConvertTo-HtmlText, so
     # the injection would come back on one platform with the build still green.
-    raw = [v for v in ("BRAND", "DOMAIN", "LOGO", "OURS") if "$" + v in head]
+    raw = [v for v in ("BRAND", "DOMAIN", "LOGO", "OURS", "IB") if "$" + v in head]
     if raw:
         sys.exit("HTMLHEAD still writes " + ", ".join("$" + v for v in raw)
                  + " unescaped; use the _H name so the value is escaped once.")
