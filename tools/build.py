@@ -129,16 +129,23 @@ function Ask($current, $prompt, $hidden) {
   return Read-Host -Prompt $prompt
 }
 
+# Bash rejects a negative count; PowerShell's [int] accepts one and then either
+# empties the row list or silently drops the date window. Same rule, both sides.
+if ($Rows -lt 0) { Write-Host "-Rows takes a number of rows, not $Rows."; exit 1 }
+if ($Wait -lt 0) { Write-Host "-Wait takes a number of seconds, not $Wait."; exit 1 }
+if ($Days -lt 0) { Write-Host "-Days takes a number of days, not $Days."; exit 1 }
+
 $Brand  = Ask $Brand  "Brand, as Axur spells it" $false
 $Domain = Ask $Domain "Customer domain" $false
 $ApiKey = Ask $ApiKey "Axur API key" $true
 
 $Domain = ($Domain -replace '^[a-z]+://', '' -replace '^www\.', '').Split('/')[0].ToLower()
-# the fuzzy searches match a domain label, not a brand name
-$parts = $Domain.Split('.') | Where-Object { $_ }
-if ($parts.Count -gt 2) { $parts = $parts[-3..-1] }
-$label = $parts[0]
-if (-not $Out) { $Out = "axur-report-$Domain.html" }
+# The fuzzy searches match a domain label, not a brand name. Bash takes the
+# first component and names the file after it. This kept the last three
+# components and named the file after the whole domain, so the same customer
+# gave the two platforms a different search and a different filename.
+$label = ($Domain.Split('.') | Where-Object { $_ })[0]
+if (-not $Out) { $Out = "axur-report-$label.html" }
 
 if ($SaveConfig) {
   $SaveConfig = Expand-UserPath $SaveConfig
@@ -241,8 +248,15 @@ $partial = @(); $incomplete = @()
 # recognise a password you already hold and useless to anyone who does not.
 function Hide-Passwords($text) {
   if (-not $MaskPasswords) { return $text }
-  $t = [regex]::Replace($text, '"password"\s*:\s*"(.)[^"]*(.)"', '"password":"$1*****$2"')
-  return [regex]::Replace($t, '"password"\s*:\s*"[^"]?"', '"password":"*"')
+  # A quote or a backslash inside a password arrives escaped. Matching to the
+  # next quote stopped inside the escape, left part of the password behind, and
+  # for a value ending in a backslash escaped the closing quote and broke the
+  # payload. Keep first and last only while the value is plain; mask a value
+  # carrying any escape end to end. The last rule needs a backslash, so it
+  # cannot re-mask what the first two just wrote.
+  $t = [regex]::Replace($text,  '"password"\s*:\s*"([^"\\])[^"\\]*([^"\\])"', '"password":"$1*****$2"')
+  $t = [regex]::Replace($t,     '"password"\s*:\s*"([^"\\])?"', '"password":"*"')
+  return [regex]::Replace($t,   '"password"\s*:\s*"([^"\\]|\\.)*\\.([^"\\]|\\.)*"', '"password":"*****"')
 }
 
 function Test-Keep($row) {
@@ -293,6 +307,18 @@ function Start-Search($name, $source, $query) {
         $attempt++
         Write-Host "    rate limited; retrying $name after 25 seconds"
         Start-Sleep -Seconds 25
+        continue
+      }
+      # A rejected query earns the retry; a bad key or a closed tenant does not.
+      # Windows used to fail the whole run when the API turned the date clause
+      # down with a status code rather than a 200 carrying no searchId.
+      if (-not $dateTried -and $try -ne $query -and ($c -eq 400 -or $c -eq 422)) {
+        $dateTried = $true
+        if (-not $script:dateWarned) {
+          Write-Host "  Axur would not take the -Days filter, so the searches cover all time."
+          $script:dateWarned = $true
+        }
+        $try = $query
         continue
       }
       Write-Host -NoNewline ("{0,-26}" -f $name)
@@ -377,9 +403,13 @@ function Complete-Search($job) {
     # test are written once rather than twice.
     $p = 2
     while ($p -le $PageCap + 1) {
+      # Running out of rows and the request failing both used to end the walk
+      # the same quiet way, and the filtered count then went on the cover as a
+      # total. A page that never arrived is a short pull, not the end.
       try { $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content }
-      catch { break }
-      $pr = @(($pg | ConvertFrom-Json).result.data)
+      catch { $script:partial += $name; break }
+      try { $pr = @(($pg | ConvertFrom-Json).result.data) }
+      catch { $script:partial += $name; break }
       if (-not $pr.Count) { break }
       if ($pg -eq $prevKey) { break }
       # a real page beyond the cap is the one thing that means "there was more"
@@ -411,6 +441,14 @@ Write-Host "-------------------------------------------"
 ###SEARCHES###
 Write-Host "-------------------------------------------"
 
+# The two ways a count can be short. The terminal says them at the end of the
+# run; the cover has to say them too, or the customer reads a floor as a total.
+$PWNOTE = if ($MaskPasswords) { "Leaked passwords are masked: first and last character at most." }
+          else                { "Leaked passwords are included in full." }
+$CAVEAT = ""
+if ($incomplete.Count) { $CAVEAT = " Some counts were still climbing when the scan stopped, so they are a minimum." }
+if ($partial.Count)    { $CAVEAT = "$CAVEAT Filtered counts cover only the rows that were pulled." }
+
 $head = @'
 ###HTMLHEAD###
 '@
@@ -424,7 +462,9 @@ $head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAI
               Replace('{{IB}}', (ConvertTo-HtmlText $ibData)).
               Replace('{{DATE_ISO}}',   $now.ToString('yyyy-MM-dd')).
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
-              Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy'))
+              Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy')).
+              Replace('{{CAVEAT}}', (ConvertTo-HtmlText $CAVEAT)).
+              Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE))
 $tail = $tail.Replace('ROWSVALUE', "$Rows")
 
 function Esc($s) { ($s -replace '\\', '\\' -replace '"', '\"') }
@@ -460,7 +500,8 @@ if ($incomplete.Count) {
   Write-Host "floor, not a total. Re-run with a longer -Wait: $($incomplete -join ', ')"
 }
 if ($partial.Count) {
-  Write-Host "Note: hit the page cap on $($partial -join ', '). Those counts came from a partial pull."
+  Write-Host "Note: these stopped short while filtering, at the page cap or because a page"
+  Write-Host "did not come back, so the filtered count covers only the rows pulled: $($partial -join ', ')"
 }
 
 # Edge ships with Windows and prints without opening a window
@@ -550,7 +591,8 @@ def build_powershell(sh_text):
 
     # the shell interpolates these; PowerShell will .Replace() them instead
     for var, ph in (("BRAND_H", "{{BRAND}}"), ("DOMAIN_H", "{{DOMAIN}}"),
-                    ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}"), ("IB_H", "{{IB}}")):
+                    ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}"), ("IB_H", "{{IB}}"),
+                    ("CAVEAT", "{{CAVEAT}}"), ("PWNOTE", "{{PWNOTE}}")):
         head = head.replace("${%s}" % var, ph).replace("$" + var, ph)
 
     # Only the escaped names belong in the page. Mapping the raw names here as
@@ -572,6 +614,15 @@ def build_powershell(sh_text):
     if left:
         sys.exit("unhandled shell expression in HTMLHEAD, PowerShell cannot run it:\n  "
                  + "\n  ".join(left[:3]))
+
+    # PowerShell reads the cover from a literal here-string, so a shell variable
+    # left behind is printed to the customer as its own name. $CAVEAT shipped
+    # that way. Map every name above, or the build stops here.
+    stray = sorted(set(re.findall(r"\$\{?([A-Z][A-Z0-9_]*)\}?", head)))
+    if stray:
+        sys.exit("HTMLHEAD still writes " + ", ".join("$" + v for v in stray)
+                 + "; PowerShell prints that name instead of a value. Add it to"
+                   " the placeholder list above.")
 
     for name, text in (("HTMLHEAD", head), ("HTMLTAIL", tail)):
         for bad in ("'@", '"@'):

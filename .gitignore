@@ -1,3 +1,8 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Generated reports hold real customer data: leaked addresses and passwords.
+# They must never reach a public repo.
+axur-report-*.html
+axur-report-*.pdf

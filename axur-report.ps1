@@ -110,16 +110,23 @@ function Ask($current, $prompt, $hidden) {
   return Read-Host -Prompt $prompt
 }
 
+# Bash rejects a negative count; PowerShell's [int] accepts one and then either
+# empties the row list or silently drops the date window. Same rule, both sides.
+if ($Rows -lt 0) { Write-Host "-Rows takes a number of rows, not $Rows."; exit 1 }
+if ($Wait -lt 0) { Write-Host "-Wait takes a number of seconds, not $Wait."; exit 1 }
+if ($Days -lt 0) { Write-Host "-Days takes a number of days, not $Days."; exit 1 }
+
 $Brand  = Ask $Brand  "Brand, as Axur spells it" $false
 $Domain = Ask $Domain "Customer domain" $false
 $ApiKey = Ask $ApiKey "Axur API key" $true
 
 $Domain = ($Domain -replace '^[a-z]+://', '' -replace '^www\.', '').Split('/')[0].ToLower()
-# the fuzzy searches match a domain label, not a brand name
-$parts = $Domain.Split('.') | Where-Object { $_ }
-if ($parts.Count -gt 2) { $parts = $parts[-3..-1] }
-$label = $parts[0]
-if (-not $Out) { $Out = "axur-report-$Domain.html" }
+# The fuzzy searches match a domain label, not a brand name. Bash takes the
+# first component and names the file after it. This kept the last three
+# components and named the file after the whole domain, so the same customer
+# gave the two platforms a different search and a different filename.
+$label = ($Domain.Split('.') | Where-Object { $_ })[0]
+if (-not $Out) { $Out = "axur-report-$label.html" }
 
 if ($SaveConfig) {
   $SaveConfig = Expand-UserPath $SaveConfig
@@ -222,8 +229,15 @@ $partial = @(); $incomplete = @()
 # recognise a password you already hold and useless to anyone who does not.
 function Hide-Passwords($text) {
   if (-not $MaskPasswords) { return $text }
-  $t = [regex]::Replace($text, '"password"\s*:\s*"(.)[^"]*(.)"', '"password":"$1*****$2"')
-  return [regex]::Replace($t, '"password"\s*:\s*"[^"]?"', '"password":"*"')
+  # A quote or a backslash inside a password arrives escaped. Matching to the
+  # next quote stopped inside the escape, left part of the password behind, and
+  # for a value ending in a backslash escaped the closing quote and broke the
+  # payload. Keep first and last only while the value is plain; mask a value
+  # carrying any escape end to end. The last rule needs a backslash, so it
+  # cannot re-mask what the first two just wrote.
+  $t = [regex]::Replace($text,  '"password"\s*:\s*"([^"\\])[^"\\]*([^"\\])"', '"password":"$1*****$2"')
+  $t = [regex]::Replace($t,     '"password"\s*:\s*"([^"\\])?"', '"password":"*"')
+  return [regex]::Replace($t,   '"password"\s*:\s*"([^"\\]|\\.)*\\.([^"\\]|\\.)*"', '"password":"*****"')
 }
 
 function Test-Keep($row) {
@@ -274,6 +288,18 @@ function Start-Search($name, $source, $query) {
         $attempt++
         Write-Host "    rate limited; retrying $name after 25 seconds"
         Start-Sleep -Seconds 25
+        continue
+      }
+      # A rejected query earns the retry; a bad key or a closed tenant does not.
+      # Windows used to fail the whole run when the API turned the date clause
+      # down with a status code rather than a 200 carrying no searchId.
+      if (-not $dateTried -and $try -ne $query -and ($c -eq 400 -or $c -eq 422)) {
+        $dateTried = $true
+        if (-not $script:dateWarned) {
+          Write-Host "  Axur would not take the -Days filter, so the searches cover all time."
+          $script:dateWarned = $true
+        }
+        $try = $query
         continue
       }
       Write-Host -NoNewline ("{0,-26}" -f $name)
@@ -358,9 +384,13 @@ function Complete-Search($job) {
     # test are written once rather than twice.
     $p = 2
     while ($p -le $PageCap + 1) {
+      # Running out of rows and the request failing both used to end the walk
+      # the same quiet way, and the filtered count then went on the cover as a
+      # total. A page that never arrived is a short pull, not the end.
       try { $pg = (Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=$p&alias=true" -Headers $headers).Content }
-      catch { break }
-      $pr = @(($pg | ConvertFrom-Json).result.data)
+      catch { $script:partial += $name; break }
+      try { $pr = @(($pg | ConvertFrom-Json).result.data) }
+      catch { $script:partial += $name; break }
       if (-not $pr.Count) { break }
       if ($pg -eq $prevKey) { break }
       # a real page beyond the cap is the one thing that means "there was more"
@@ -400,6 +430,14 @@ $jobs = @(
 # now wait: they have all been running on Axur's side since they started
 $results = @($jobs | ForEach-Object { Complete-Search $_ })
 Write-Host "-------------------------------------------"
+
+# The two ways a count can be short. The terminal says them at the end of the
+# run; the cover has to say them too, or the customer reads a floor as a total.
+$PWNOTE = if ($MaskPasswords) { "Leaked passwords are masked: first and last character at most." }
+          else                { "Leaked passwords are included in full." }
+$CAVEAT = ""
+if ($incomplete.Count) { $CAVEAT = " Some counts were still climbing when the scan stopped, so they are a minimum." }
+if ($partial.Count)    { $CAVEAT = "$CAVEAT Filtered counts cover only the rows that were pulled." }
 
 $head = @'
 <!DOCTYPE html>
@@ -660,13 +698,13 @@ $head = @'
     <div class="fact"><span>Scan date</span><b>{{DATE_SHORT}}</b></div>
     <div class="fact"><span>Data source</span><b>Axur (one.axur.com)</b></div>
   </div>
-  <p class="key"><span><span class="dot r"></span>Red: somebody could use this today.</span>
+  <p class="key"><span><span class="dot r"></span>Red: ready to use as it stands, if it is still live.</span>
     <span><span class="dot a"></span>Amber: exposure that needs one more step first.</span></p>
 
   <div id="metrics"></div>
 
   <div class="toc" id="toc"></div>
-  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Leaked passwords are included in full.$CAVEAT</p>
+  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. {{PWNOTE}}{{CAVEAT}}</p>
 </div></div>
 
 <div class="wrap" id="sections"></div>
@@ -924,8 +962,8 @@ $tail = @'
     'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
     'In plaintext':'The accounts from section 01 whose password was stored in readable form. These are the ones to reset first. They are not listed again here: section 01 puts them at the top of its table.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
-    'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, but it is the first step in most of these attacks. Your own defensive registrations appear here too.',
-    'Mail-enabled lookalikes':'The lookalike domains with mail records already published. A domain set up to receive mail is a domain someone is running as a mailbox, not parking, so these are the ones being used rather than merely bought.'
+    'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, and many are never used. Your own defensive registrations appear here too.',
+    'Mail-enabled lookalikes':'The lookalike domains with mail records already published. The record says the domain is configured to receive mail. It does not say anyone reads it: a registrar default, a defensive registration and a working mailbox all look the same here.'
   };
 
   /* ---------- the summary cards ---------- */
@@ -941,16 +979,16 @@ $tail = @'
       big:n('Leaked credentials'), lab:'leaked records tied to your domain. One account can appear more than once', sev:'a',
       sub:n('In plaintext'), subLab:'of them with the password in readable form, usable today', subSev:'r',
       desc:'Accounts on ' + esc(DOMAIN) + ' whose passwords have already been exposed somewhere outside your company.',
-      why:'They come from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware.' },
+      why:'They reach Axur from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware. A row does not always say which.' },
     { icon:'mask', title:'Impersonation sites', go:sectionOf('Phishing pages'),
       big:n('Phishing pages'), lab:'web pages built to look like ' + esc(Brand), sev:'r',
-      desc:'Pages designed so that a customer or an employee hands over a login or a card number, believing they are dealing with you.',
-      why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out.' },
+      desc:'Pages built to look like you, so a customer or an employee deals with them believing they are dealing with you.',
+      why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out. What each page asks the visitor for is not part of the count; open the rows to see.' },
     { icon:'site', title:'Lookalike domains', go:sectionOf('Lookalike domains'),
       big:n('Lookalike domains'), lab:'registered names one character away from yours', sev:'a',
-      sub:n('Mail-enabled lookalikes'), subLab:'of them can receive mail, so somebody is running them, not parking them', subSev:'r',
-      desc:'Domain names one swapped, dropped or doubled letter away from ' + esc(DOMAIN) + '. They exist to be mistaken for you.',
-      why:'A parked lookalike is a nuisance. Mail records say the domain can receive mail, which means somebody wants replies to it and is running it rather than sitting on it. It does not prove they have sent anything.' },
+      sub:n('Mail-enabled lookalikes'), subLab:'of them are configured to receive mail, so a reply from one would land somewhere', subSev:'r',
+      desc:'Domain names one swapped, dropped or doubled letter away from ' + esc(DOMAIN) + '. They are close enough to be mistaken for you.',
+      why:'A mail record is the setup a convincing reply address needs, so this is the shorter list to look at first. It is a DNS setting, not activity: it does not show that mail has been sent, received or read.' },
     { icon:'risk', title:'External attack surface', aside:true,
       desc:'The servers, services and open doors reachable from the public internet under your name.',
       why:'Not counted in this report. It comes from a different Axur screen and is supplied as a separate file.' }
@@ -1112,7 +1150,9 @@ $head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAI
               Replace('{{IB}}', (ConvertTo-HtmlText $ibData)).
               Replace('{{DATE_ISO}}',   $now.ToString('yyyy-MM-dd')).
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
-              Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy'))
+              Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy')).
+              Replace('{{CAVEAT}}', (ConvertTo-HtmlText $CAVEAT)).
+              Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE))
 $tail = $tail.Replace('ROWSVALUE', "$Rows")
 
 function Esc($s) { ($s -replace '\\', '\\' -replace '"', '\"') }
@@ -1148,7 +1188,8 @@ if ($incomplete.Count) {
   Write-Host "floor, not a total. Re-run with a longer -Wait: $($incomplete -join ', ')"
 }
 if ($partial.Count) {
-  Write-Host "Note: hit the page cap on $($partial -join ', '). Those counts came from a partial pull."
+  Write-Host "Note: these stopped short while filtering, at the page cap or because a page"
+  Write-Host "did not come back, so the filtered count covers only the rows pulled: $($partial -join ', ')"
 }
 
 # Edge ships with Windows and prints without opening a window

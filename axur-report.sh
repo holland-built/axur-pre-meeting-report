@@ -50,7 +50,9 @@ expand_user_path() {
 find_config() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      --config) CONFIG="$2"; shift 2 ;;
+      # a trailing --config has nothing to shift past, and "shift 2" then fails
+      # without moving, so the loop would read the same argument forever
+      --config) CONFIG="$2"; shift 2 || break ;;
       *) shift ;;
     esac
   done
@@ -236,8 +238,17 @@ trap 'rm -rf "$TMP"' EXIT
 # One character each end is enough to recognise a password you already hold and
 # useless to anyone who does not.
 MASKSED=""
+PWNOTE="Leaked passwords are included in full."
 if [ -n "$MASKPW" ]; then
-  MASKSED='; s/"password"[[:space:]]*:[[:space:]]*"(.)[^"]*(.)"/"password":"\1*****\2"/g; s/"password"[[:space:]]*:[[:space:]]*"[^"]?"/"password":"*"/g'
+  # A password can hold a quote or a backslash, and in JSON both arrive escaped.
+  # Matching to the next quote then stops inside the escape: it left part of the
+  # password behind, and a value ending in a backslash escaped the closing quote
+  # and broke the payload. So keep the first and last character only while the
+  # value is plain, and mask a value carrying any escape end to end.
+  MASKSED='; s/"password"[[:space:]]*:[[:space:]]*"([^"\])[^"\]*([^"\])"/"password":"\1*****\2"/g'
+  MASKSED="$MASKSED"'; s/"password"[[:space:]]*:[[:space:]]*"([^"\])?"/"password":"*"/g'
+  MASKSED="$MASKSED"'; s/"password"[[:space:]]*:[[:space:]]*"([^"\]|\\.)*\\.([^"\]|\\.)*"/"password":"*****"/g'
+  PWNOTE="Leaked passwords are masked: first and last character at most."
 fi
 
 AUTH="$TMP/auth"
@@ -341,7 +352,11 @@ start_search() { # start_search NAME SOURCE QUERY
   ID=$(printf '%s' "$START" | sed -n 's/.*"searchId":"\([^"]*\)".*/\1/p')
   # A dated query the API will not accept must not take the run down with it.
   # Drop the date clause, say so once, and carry on with the whole result.
-  if [ -z "$ID" ] && [ -n "$SINCE" ] && [ -z "$DATE_TRIED" ] && [ "$TRY" != "$QUERY" ]; then
+  # Only a rejected query earns the retry. A bad key or a closed tenant used to
+  # come back as "Axur would not take the --days filter", which sent people off
+  # to check a date syntax that was never the problem.
+  case "$CODE" in 200|400|422) DATE_RETRYABLE=1 ;; *) DATE_RETRYABLE="" ;; esac
+  if [ -z "$ID" ] && [ -n "$SINCE" ] && [ -z "$DATE_TRIED" ] && [ -n "$DATE_RETRYABLE" ] && [ "$TRY" != "$QUERY" ]; then
     DATE_TRIED=1
     if [ -z "$DATE_WARNED" ]; then
       echo "  Axur would not take the --days filter, so the searches cover all time." >&2
@@ -430,6 +445,10 @@ collect_search() { # collect_search N
         P=2
         while [ "$P" -le $((PAGECAP + 1)) ]; do
           PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH")
+          # Running out of rows and the request failing both used to end the
+          # walk the same quiet way, and the filtered count then went on the
+          # cover as a total. A reply carrying no data array is not a page.
+          printf '%s' "$PG" | grep -q '"data":\[' || { PARTIAL=1; break; }
           printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' || break
           THISROW=$(printf '%s' "$PG" | cksum)
           [ "$THISROW" = "$PREVROW" ] && break
@@ -488,8 +507,9 @@ if [ -s "$TMP/incomplete" ]; then
 fi
 if [ -s "$TMP/partial" ]; then
   echo ""
-  echo "These searches hit the page cap while filtering, so the filtered count"
-  echo "covers only the rows pulled:"
+  echo "These searches stopped short while filtering, either at the page cap or"
+  echo "because a page did not come back, so the filtered count covers only the"
+  echo "rows pulled:"
   sed 's/^/  /' "$TMP/partial"
   CAVEAT="$CAVEAT Filtered counts cover only the rows that were pulled."
 fi
@@ -934,13 +954,13 @@ cat <<HTMLHEAD
     <div class="fact"><span>Scan date</span><b>$(date '+%d %b %Y')</b></div>
     <div class="fact"><span>Data source</span><b>Axur (one.axur.com)</b></div>
   </div>
-  <p class="key"><span><span class="dot r"></span>Red: somebody could use this today.</span>
+  <p class="key"><span><span class="dot r"></span>Red: ready to use as it stands, if it is still live.</span>
     <span><span class="dot a"></span>Amber: exposure that needs one more step first.</span></p>
 
   <div id="metrics"></div>
 
   <div class="toc" id="toc"></div>
-  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. Leaked passwords are included in full.$CAVEAT</p>
+  <p class="foot">Counts taken from one.axur.com on the scan date. They move daily. $PWNOTE$CAVEAT</p>
 </div></div>
 
 <div class="wrap" id="sections"></div>
@@ -1212,8 +1232,8 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
     'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
     'In plaintext':'The accounts from section 01 whose password was stored in readable form. These are the ones to reset first. They are not listed again here: section 01 puts them at the top of its table.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
-    'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, but it is the first step in most of these attacks. Your own defensive registrations appear here too.',
-    'Mail-enabled lookalikes':'The lookalike domains with mail records already published. A domain set up to receive mail is a domain someone is running as a mailbox, not parking, so these are the ones being used rather than merely bought.'
+    'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, and many are never used. Your own defensive registrations appear here too.',
+    'Mail-enabled lookalikes':'The lookalike domains with mail records already published. The record says the domain is configured to receive mail. It does not say anyone reads it: a registrar default, a defensive registration and a working mailbox all look the same here.'
   };
 
   /* ---------- the summary cards ---------- */
@@ -1229,16 +1249,16 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       big:n('Leaked credentials'), lab:'leaked records tied to your domain. One account can appear more than once', sev:'a',
       sub:n('In plaintext'), subLab:'of them with the password in readable form, usable today', subSev:'r',
       desc:'Accounts on ' + esc(DOMAIN) + ' whose passwords have already been exposed somewhere outside your company.',
-      why:'They come from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware.' },
+      why:'They reach Axur from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware. A row does not always say which.' },
     { icon:'mask', title:'Impersonation sites', go:sectionOf('Phishing pages'),
       big:n('Phishing pages'), lab:'web pages built to look like ' + esc(Brand), sev:'r',
-      desc:'Pages designed so that a customer or an employee hands over a login or a card number, believing they are dealing with you.',
-      why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out.' },
+      desc:'Pages built to look like you, so a customer or an employee deals with them believing they are dealing with you.',
+      why:'Only pages Axur is highly confident are impersonating this brand are counted. Pages that merely mention the name are left out. What each page asks the visitor for is not part of the count; open the rows to see.' },
     { icon:'site', title:'Lookalike domains', go:sectionOf('Lookalike domains'),
       big:n('Lookalike domains'), lab:'registered names one character away from yours', sev:'a',
-      sub:n('Mail-enabled lookalikes'), subLab:'of them can receive mail, so somebody is running them, not parking them', subSev:'r',
-      desc:'Domain names one swapped, dropped or doubled letter away from ' + esc(DOMAIN) + '. They exist to be mistaken for you.',
-      why:'A parked lookalike is a nuisance. Mail records say the domain can receive mail, which means somebody wants replies to it and is running it rather than sitting on it. It does not prove they have sent anything.' },
+      sub:n('Mail-enabled lookalikes'), subLab:'of them are configured to receive mail, so a reply from one would land somewhere', subSev:'r',
+      desc:'Domain names one swapped, dropped or doubled letter away from ' + esc(DOMAIN) + '. They are close enough to be mistaken for you.',
+      why:'A mail record is the setup a convincing reply address needs, so this is the shorter list to look at first. It is a DNS setting, not activity: it does not show that mail has been sent, received or read.' },
     { icon:'risk', title:'External attack surface', aside:true,
       desc:'The servers, services and open doors reachable from the public internet under your name.',
       why:'Not counted in this report. It comes from a different Axur screen and is supplied as a separate file.' }
@@ -1406,8 +1426,16 @@ for f in "$TMP"/*.json; do
 done
 
 echo '</main></body></html>'
-} > "$OUT"
+} > "$OUT" || { echo '' >&2; echo "Could not write $OUT." >&2; exit 1; }
 
+# A full disk, a read-only folder or a name that is a directory all let the
+# redirection fail while the script carried on and said "done". Check the file
+# is there and has content before claiming it was written.
+if [ ! -s "$OUT" ]; then
+  echo '' >&2
+  echo "Could not write $OUT: nothing was written to it." >&2
+  exit 1
+fi
 
 echo ' done' >&2
 
