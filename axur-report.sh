@@ -712,10 +712,12 @@ ROW: for my $r (@rows) {
   push @keep, $r;
 }
 
-my $kept = scalar @keep;
+my $kept = scalar @keep; my $examined = scalar @rows;
 my $out = substr($s, 0, $begin) . join(',', @keep) . substr($s, $end);
-# the headline number is the recount, so the tile and the table agree
-$out =~ s/^(\{"name":"[^"]*","query":".*?","total":)[^,]*/$1$kept/s;
+# The headline number is the recount, so the tile and the table agree. Axur's
+# own count stays as "reported", and the rows the filter saw as "examined",
+# so the fold stage can tell when the rows in hand were fewer than the result.
+$out =~ s/^(\{"name":"[^"]*","query":".*?","total":)([^,]*)/$1$kept,"reported":$2,"examined":$examined/s;
 print $out;
 print STDERR "$kept\n";
 PERL
@@ -752,6 +754,228 @@ if [ -n "$MINSCORE$EXCLUDE" ]; then
     echo "were filtered. Re-run, or drop --min-score and --exclude." >&2
     exit 1
   fi
+  echo ' done'
+fi
+
+# ---------- fold a repeated name into one row ----------
+# A phishing kit on one host shows up as a page hit for every path on it, so
+# a single site can fill the whole table. Fold the rows that name the same
+# host into one, after the filter has counted them and before --rows cuts
+# the list, so the cap counts folded rows and a site seen 200 times says so.
+# Nothing is deleted: the headline count keeps every row, and the row that
+# stands for the group carries how many it stands for and the span of dates.
+cat > "$TMP/fold.pl" <<'PERL'
+use strict; use warnings;
+my ($name, $file, $incomplete, $partial) = @ARGV;
+open my $fh, '<:raw', $file or exit 1; my $s = do { local $/; <$fh> }; close $fh;
+my %foldable = map { $_ => 1 } ('Phishing pages', 'Lookalike domains', 'Mail-enabled lookalikes');
+if (!$foldable{$name}) { print $s; exit 0 }
+
+# The rows sit in the first "data":[ ... ] array. Walk it object by object,
+# string and escape aware, so a brace inside a value cannot fool the depth count.
+my $i = index($s, '"data"'); if ($i < 0) { print $s; exit 0 }
+$i = index($s, '[', $i); if ($i < 0) { print $s; exit 0 }
+my $begin = $i + 1;
+my (@rows, $depth, $start, $instr, $esc, $end); $depth = 0; $instr = 0; $esc = 0;
+for (my $p = $begin; $p < length($s); $p++) {
+  my $c = substr($s, $p, 1);
+  if ($instr) { if ($esc) { $esc = 0 } elsif ($c eq '\\') { $esc = 1 } elsif ($c eq '"') { $instr = 0 } next }
+  if ($c eq '"') { $instr = 1; next }
+  if ($c eq '{') { $start = $p unless $depth; $depth++; next }
+  if ($c eq '}') { $depth--; push @rows, substr($s, $start, $p - $start + 1) unless $depth; next }
+  if ($c eq ']' && !$depth) { $end = $p; last }
+}
+if (!defined $end) { print $s; exit 0 }
+
+# A value is read by decoding the JSON, not by a regex over the text: a quote
+# or a backslash inside a host name must not hand back half a value. jstring
+# decodes one string from pos(), every escape included, and refuses what JSON
+# refuses: a raw control character, an escape JSON does not have, a surrogate
+# escape without its other half. \uXXXX comes out as UTF-8 bytes, which is how
+# the rest of the file spells the same character.
+my %ESC = ('"' => '"', '\\' => '\\', '/' => '/', b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");
+my $NUM = qr/-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?/;
+# One well-formed UTF-8 character, as bytes. A run of raw bytes in a string
+# has to be made of these, or the row is not something to fold on.
+my $UTF8 = qr/[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2}/;
+sub jstring {
+  my $out = '';
+  return undef unless $_[0] =~ /\G"/gc;
+  while (1) {
+    if ($_[0] =~ /\G([^"\\\x00-\x1f]+)/gc) { my $run = $1; return undef unless $run =~ /^(?:$UTF8)*\z/; $out .= $run; next }
+    return $out if $_[0] =~ /\G"/gc;
+    if ($_[0] =~ /\G\\u([0-9a-fA-F]{4})/gc) {
+      my $cp = hex $1;
+      if ($cp >= 0xD800 && $cp <= 0xDBFF) {
+        return undef unless $_[0] =~ /\G\\u([dD][c-fC-F][0-9a-fA-F]{2})/gc;
+        $cp = 0x10000 + (($cp - 0xD800) << 10) + (hex($1) - 0xDC00);
+      } elsif ($cp >= 0xDC00 && $cp <= 0xDFFF) { return undef }
+      my $ch = chr $cp; utf8::encode($ch); $out .= $ch; next;
+    }
+    if ($_[0] =~ /\G\\(["\\\/bfnrt])/gc) { $out .= $ESC{$1}; next }
+    return undef;
+  }
+}
+# Step over one JSON value of any kind, checking it as it goes. 0 when it is
+# not JSON, so a nested object that would not parse leaves its row unfolded.
+sub jvalue {
+  $_[0] =~ /\G\s+/gc;
+  if (substr($_[0], pos($_[0]) // 0, 1) eq '"') { return defined jstring($_[0]) ? 1 : 0 }
+  return 1 if $_[0] =~ /\G$NUM/gc;
+  return 1 if $_[0] =~ /\G(?:true|false|null)/gc;
+  if ($_[0] =~ /\G\[\s*/gc) {
+    return 1 if $_[0] =~ /\G\]/gc;
+    while (1) {
+      return 0 unless jvalue($_[0]);
+      $_[0] =~ /\G\s+/gc;
+      next if $_[0] =~ /\G,/gc;
+      return $_[0] =~ /\G\]/gc ? 1 : 0;
+    }
+  }
+  if ($_[0] =~ /\G\{\s*/gc) {
+    return 1 if $_[0] =~ /\G\}/gc;
+    while (1) {
+      return 0 unless defined jstring($_[0]);
+      return 0 unless $_[0] =~ /\G\s*:/gc;
+      return 0 unless jvalue($_[0]);
+      $_[0] =~ /\G\s+/gc;
+      next if $_[0] =~ /\G,\s*/gc;
+      return $_[0] =~ /\G\}/gc ? 1 : 0;
+    }
+  }
+  return 0;
+}
+# The top-level fields of one row: ['s', text] for a string, ['n', text] for a
+# number; true, false, null and anything nested are checked and skipped. undef
+# when the row is not well-formed JSON, or when a field the fold reads appears
+# twice: this script would take the first and PowerShell's parser the last,
+# and neither is more than a guess. A row that does not parse is left alone.
+my %READS = map { $_ => 1 } ('host', 'domain', 'reference', 'riskScore', 'detectionDate');
+sub fields {
+  my (%f, %seen);
+  pos($_[0]) = 0;
+  return undef unless $_[0] =~ /\G\s*\{\s*/gc;
+  return \%f if $_[0] =~ /\G\}\s*\z/gc;
+  while (1) {
+    my $k = jstring($_[0]); return undef unless defined $k;
+    return undef if $READS{$k} && $seen{$k}++;
+    return undef unless $_[0] =~ /\G\s*:\s*/gc;
+    my $c = substr($_[0], pos($_[0]) // 0, 1);
+    if ($c eq '"') { my $v = jstring($_[0]); return undef unless defined $v; $f{$k} = ['s', $v] unless exists $f{$k} }
+    elsif ($_[0] =~ /\G($NUM)/gc) { $f{$k} = ['n', $1] unless exists $f{$k} }
+    elsif ($_[0] =~ /\G(?:true|false|null)/gc) { }
+    elsif ($c eq '[' || $c eq '{') { return undef unless jvalue($_[0]) }
+    else { return undef }
+    $_[0] =~ /\G\s+/gc;
+    next if $_[0] =~ /\G,\s*/gc;
+    return \%f if $_[0] =~ /\G\}\s*\z/gc;
+    return undef;
+  }
+}
+# A number, from a number or from a string written the way JSON writes a
+# number; undef otherwise. The PowerShell script applies the same grammar, so
+# neither side takes "NaN" or "Infinity" and neither can pick a different row.
+sub numv {
+  my ($f, $k) = @_; my $x = $f->{$k}; return undef unless $x;
+  return $x->[1] + 0 if $x->[1] =~ /^$NUM$/;
+  return undef;
+}
+# The fold key: the first non-empty of host, domain, reference, with any
+# scheme and any path taken off, lowercased in ASCII only so that the
+# PowerShell script, which does the same, cannot disagree on a letter.
+sub keyof {
+  my ($f) = @_;
+  for my $k ('host', 'domain', 'reference') {
+    my $x = $f->{$k}; next unless $x && $x->[0] eq 's' && length $x->[1];
+    my $h = $x->[1];
+    $h =~ s{^[A-Za-z][A-Za-z0-9+.\-]*://}{};
+    $h =~ s{[/?#].*}{}s;
+    $h =~ tr/A-Z/a-z/;
+    return $h;
+  }
+  return '';
+}
+# The row that stands for the group: highest score, then newest date, then
+# the one seen first. A missing score sits below every score, and a missing
+# date before every date.
+sub better {
+  my ($sc, $d, $bs, $bd) = @_;
+  return 1 if defined $sc && !defined $bs; return 0 if !defined $sc && defined $bs;
+  return $sc > $bs if defined $sc && $sc != $bs;
+  return 1 if defined $d && !defined $bd; return 0 if !defined $d && defined $bd;
+  return $d > $bd if defined $d && $d != $bd;
+  return 0;
+}
+
+# Every group keeps the place of its first row, so the order the API chose
+# survives for the rows that are not folded.
+my $pulled = scalar @rows;
+my (@slots, %group);
+for my $r (@rows) {
+  my $f = fields($r);
+  my $k = $f ? keyof($f) : '';
+  if ($k eq '') { push @slots, [$r]; next }
+  if (!$group{$k}) { $group{$k} = []; push @slots, $k }
+  push @{$group{$k}}, [$r, $f];
+}
+my @out;
+for my $sl (@slots) {
+  if (ref $sl) { push @out, $sl->[0]; next }
+  my $g = $group{$sl};
+  if (@$g < 2) { push @out, $g->[0][0]; next }
+  my ($best, $bs, $bd, $first, $last);
+  for my $e (@$g) {
+    my $sc = numv($e->[1], 'riskScore'); my $d = numv($e->[1], 'detectionDate');
+    if (defined $d) { $first = $d if !defined $first || $d < $first; $last = $d if !defined $last || $d > $last }
+    if (!defined $best || better($sc, $d, $bs, $bd)) { ($best, $bs, $bd) = ($e->[0], $sc, $d) }
+  }
+  my $mark = ',"foldCount":' . scalar(@$g);
+  $mark .= sprintf(',"foldFirst":%.0f,"foldLast":%.0f', $first, $last) if defined $first;
+  (my $row = $best) =~ s/\}\s*\z/$mark}/;
+  push @out, $row;
+}
+my $folded = scalar @out;
+
+my $out = substr($s, 0, $begin) . join(',', @out) . substr($s, $end);
+# The record carries, after total: reported (Axur's own count), examined (the
+# raw rows in hand), pulled (the rows after the filter), folded (the rows they
+# became). The filter writes the first two when it runs; otherwise they are
+# the total and the row count as they stand. foldPartial says the fold saw
+# only part of the result, and the report puts a note above that table. It is
+# set when the count is unknown, when the search was still running so the
+# count is a floor, when the page walk stopped short, or when fewer rows were
+# examined than Axur reported - which also covers a walk that ended because
+# a page came back twice.
+my ($h) = $out =~ /^(\{"name":"[^"]*","query":".*?","total":[^,]*)/s;
+exit 1 unless defined $h;
+my ($total) = $h =~ /"total":([^,]*)\z/;
+my ($reported, $examined, $extra) = ($total, $pulled, '');
+if (substr($out, length $h) =~ /^,"reported":([^,]*),"examined":([0-9]+)/) {
+  ($reported, $examined) = ($1, $2); $h .= qq{,"reported":$reported,"examined":$examined};
+} else {
+  $extra = qq{,"reported":$reported,"examined":$examined};
+}
+$extra .= qq{,"pulled":$pulled,"folded":$folded};
+$extra .= ',"foldPartial":1'
+  if $reported !~ /^[0-9]+$/ || $incomplete || $partial || $examined < $reported;
+print $h, $extra, substr($out, length $h);
+PERL
+
+if [ -x /usr/bin/perl ]; then
+  printf 'Folding repeats... '
+  for f in "$TMP"/*.json; do
+    B=$(basename "$f" .json)
+    # a search that never started examined nothing, so it carries no fold fields
+    [ -e "$TMP/$B.failed" ] && continue
+    NAME=$(cat "$TMP/$B.name"); INC=0; PART=0
+    grep -qxF -- "$NAME" "$TMP/incomplete" 2>/dev/null && INC=1
+    grep -qxF -- "$NAME" "$TMP/partial" 2>/dev/null && PART=1
+    if /usr/bin/perl "$TMP/fold.pl" "$NAME" "$f" "$INC" "$PART" > "$f.t" 2>/dev/null && [ -s "$f.t" ]; then
+      mv "$f.t" "$f"
+    else
+      rm -f "$f.t"
+    fi
+  done
   echo ' done'
 fi
 
@@ -838,9 +1062,11 @@ chmod 600 "$OUT" 2>/dev/null || true
 # the totals block in the report, and again for the summary printed at the end.
 # Both scans read the whole reply, which is megabytes. Cut it out once here and
 # let both readers take it from the small file.
+# total is not the last field: the fold stage adds pulled, folded and
+# foldPartial after it. Cut the record at the reply, whatever comes before it.
+# A search that could not start has no reply and an empty data array instead.
 for f in "$TMP"/*.json; do
-  sed -n 's/^{"name":"\([^"]*\)","query":"\(.*\)","total":\([^,]*\),.*/{"name":"\1","query":"\2","total":\3}/p' \
-    "$f" | head -1 > "$f.head"
+  sed -n -e 's/,"reply":.*$/}/p' -e 's/,"data":\[\]}$/}/p' "$f" | head -1 > "$f.head"
 done
 
 printf 'Writing the report ' >&2
@@ -1003,6 +1229,7 @@ cat <<HTMLHEAD
  .brands{line-height:1.4}
  .brands .you{font-weight:600}
  .more{font-size:12.5px;color:var(--mute);margin-top:9px}
+ .foldnote{font-size:12.5px;color:var(--mute);margin:0 0 8px}                /* above a table whose fold saw only part of the result */
  /* the break between the rows that lead and the rest. It sets its own
     background because the zebra rule above would stripe it like a data row.
     break-after:avoid keeps it on the same printed page as the first row it
@@ -1182,6 +1409,13 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   try { totals = JSON.parse(document.getElementById('totals').textContent) || []; } catch (e) { totals = []; }
   var tot = {};
   totals.forEach(function(t){ tot[t.name] = t.total; });
+  // A repeated site is folded into one row after the rows were pulled, so a
+  // fold over the first page alone is a fold over part of the result. The
+  // filtering caveat on the cover is a different thing; this sits beside it.
+  if (totals.some(function(t){ return Number(t.foldPartial) === 1; })) {
+    var foot = document.querySelector('.cover .foot');
+    if (foot) foot.appendChild(document.createTextNode(' A site seen more than once is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
+  }
   // One search per block. Parsing them together meant a single bad reply threw
   // once and blanked all five tables, and the empty result was cached, so a
   // retry could not help either. This throws for the caller to catch and report
@@ -1329,6 +1563,18 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   function cell(f, v, r){
     try { return F[f](v, r); } catch (e) { try { return esc(str(v)); } catch (e2) { return ''; } }
   }
+  // "200 times, 04 Jan 2026 to 02 Sep 2026" under the name of a row that
+  // stands for a group. A row standing for itself carries no markers and no note.
+  function foldNote(r){
+    var c = Number(r && r.foldCount);
+    if (!(c >= 2)) return '';
+    var a = dateOf(r.foldFirst), b = dateOf(r.foldLast), when = '';
+    if (a && b) when = fmtDate(a) === fmtDate(b) ? fmtDate(a) : fmtDate(a) + ' to ' + fmtDate(b);
+    else if (a || b) when = fmtDate(a || b);
+    return '<span class="sec fold">' + c + ' times' + (when ? ', ' + when : '') + '</span>';
+  }
+  // how many records the rows on show stand for
+  function standFor(rs){ return rs.reduce(function(a, r){ var c = Number(r && r.foldCount); return a + (c >= 2 ? c : 1); }, 0); }
 
   /* ---------- which columns, in which order, at which width ----------
      w is the share of the table on screen, wp the share on A4 paper (both sum to 100).
@@ -1560,7 +1806,29 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
         var ths = cs.map(function(c){ return '<th>' + c.h + '</th>'; });
         ths[ths.length - 1] = ths[ths.length - 1]
           .replace('</th>', '<a class="totop" href="#top">&uarr; Top</a></th>');
-        var html = '<table><colgroup><col style="--w:4%">' +
+        // What the rows on screen stand for, and whether this SEARCH folded
+        // anything. The second question is not the first: a lone row can sort
+        // to the top and a small --rows can cut the table before the folded
+        // group, and the section would then fall back to counting raw records
+        // as though they were rows, which is the confusion this feature exists
+        // to remove. Ask the search's own numbers.
+        var stand = standFor(rs), folded = Number(t.folded) < Number(t.pulled);
+        // The fold ran over the rows in hand. When that is fewer than the
+        // total, the counts and dates in the rows cover those records only,
+        // and the reader is told so here, above the table they are about.
+        var html = '';
+        if (Number(t.foldPartial) === 1) {
+          // examined is what was pulled from Axur and compared with its count;
+          // pulled is what survived the filter, and is all the fold ever saw.
+          var rep = Number(t.reported), ex = Number(t.examined), pu = Number(t.pulled), fo = Number(t.folded);
+          html += '<p class="foldnote">' +
+            (isNaN(rep) || t.reported === null ? 'Axur did not give a count for this search; ' + show(ex) + ' records were pulled'
+                                               : 'Axur reports ' + show(rep) + ' records; ' + show(ex) + ' of them were pulled') +
+            (ex === pu ? ' and folded into ' + show(fo) + ' rows. '
+                       : ', and the filter kept ' + show(pu) + '. Those ' + show(pu) + ' folded into ' + show(fo) + ' rows. ') +
+            'The "times" counts and dates cover those ' + show(pu) + ' records only; more may exist.</p>';
+        }
+        html += '<table><colgroup><col style="--w:4%">' +
           cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') +
           '</colgroup><thead><tr><th class="idx">#</th>' + ths.join('') + '</tr></thead><tbody>';
         rs.forEach(function(r, ri){
@@ -1578,15 +1846,27 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
           // and a score arriving on one of its rows must not paint it red.
           html += '<tr' + (ri < 3 && ri < nlead && sp.scored ? ' class="hi"' : '') +
             '><td class="idx">' + (ri + 1) + '</td>' +
-            cs.map(function(c){ return '<td>' + cell(c.f, r[c.k], r) + '</td>'; }).join('') + '</tr>';
+            cs.map(function(c, ci){ return '<td>' + cell(c.f, r[c.k], r) + (ci === 0 ? foldNote(r) : '') + '</td>'; }).join('') + '</tr>';
         });
-        html += '</tbody></table><p class="more">' +
-          (total === null ? 'Showing ' + rs.length + ' records; the total count was not available.'
-                          : (rs.length < total ? 'The first ' + rs.length + ' of ' + show(total) + ' records.' : 'All ' + show(total) + ' records.')) +
+        // A folded row stands for more than itself, so "first N of M records"
+        // would undercount what is on show. Say the rows, what they stand for, and the total.
+        var line;
+        if (folded) {
+          line = rs.length + ' rows, standing for ' +
+            (total === null ? show(stand) + ' records; the total count was not available.'
+                            : (stand < total ? show(stand) + ' of ' + show(total) + ' records.' : 'all ' + show(total) + ' records.')) +
+            ' A site seen more than once is one row, and the row says how many times.';
+        } else {
+          line = total === null ? 'Showing ' + rs.length + ' records; the total count was not available.'
+                                : (rs.length < total ? 'The first ' + rs.length + ' of ' + show(total) + ' records.' : 'All ' + show(total) + ' records.');
+        }
+        html += '</tbody></table><p class="more">' + line +
           ' "Found by Axur" is the day the record reached Axur, which can be long after the event itself.</p>';
         box.innerHTML = html;
         var cnt = secs.querySelector('.cnt[data-cnt="' + i + '"]');
-        if (cnt) cnt.innerHTML = '<b>' + show(total) + '</b> records &middot; ' + (total !== null && rs.length < total ? 'first ' + rs.length + ' shown' : 'all shown');
+        if (cnt) cnt.innerHTML = '<b>' + show(total) + '</b> records &middot; ' +
+          (folded ? rs.length + ' rows shown, standing for ' + show(stand)
+                  : (total !== null && rs.length < total ? 'first ' + rs.length + ' shown' : 'all shown'));
       } catch (e) {
         box.innerHTML = '<p class="more">These records could not be rendered (' + esc(e && e.message) + ').</p>';
       }
@@ -1682,7 +1962,7 @@ echo "Summary"
 K=1
 while [ "$K" -le "$COUNT" ]; do
   NAME=$(cat "$TMP/$K.name")
-  TOTAL=$(sed -n 's/.*,"total":\(.*\)}$/\1/p' "$TMP/$K.json.head")
+  TOTAL=$(sed -n 's/.*,"total":\([^,}]*\).*/\1/p' "$TMP/$K.json.head")
   [ -n "$TOTAL" ] || TOTAL="not available"
   [ "$TOTAL" = "null" ] && TOTAL="not available"
   printf '  %-26s %s\n' "$NAME" "$TOTAL"

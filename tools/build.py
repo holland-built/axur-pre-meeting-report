@@ -382,6 +382,156 @@ function Test-Keep($row) {
   return $true
 }
 
+# Fold the rows that name the same host into one. The same rule as fold.pl in
+# axur-report.sh: the key is the first non-empty of host, domain, reference
+# with any scheme and path taken off, lowercased in ASCII only so the two
+# scripts cannot disagree on a letter. Only the three site searches fold.
+function ConvertTo-AsciiLower($s) {
+  return [regex]::Replace([string]$s, '[A-Z]', [Text.RegularExpressions.MatchEvaluator]{ param($m) $m.Value.ToLowerInvariant() })
+}
+# A property by its exact name. $row.host would also answer for "Host", and
+# fold.pl, which reads the lowercase names Axur sends, would not.
+function Get-Prop($row, $name) {
+  if ($null -eq $row -or $row -isnot [psobject]) { return $null }
+  foreach ($p in $row.PSObject.Properties) { if ($p.Name -ceq $name) { return $p.Value } }
+  return $null
+}
+function Get-FoldKey($row) {
+  foreach ($f in @('host', 'domain', 'reference')) {
+    $v = Get-Prop $row $f
+    if ($v -isnot [string] -or $v -eq '') { continue }
+    $k = $v -replace '^[A-Za-z][A-Za-z0-9+.-]*://', '' -replace '(?s)[/?#].*', ''
+    return (ConvertTo-AsciiLower $k)
+  }
+  return ''
+}
+# A number, from a number or from a string written the way JSON writes a
+# number; $null otherwise. .NET would also take "NaN" and "Infinity", which
+# fold.pl's grammar does not, and NaN never loses a comparison.
+function Get-Num($v) {
+  if ($null -eq $v) { return $null }
+  $t = [string]$v
+  if ($t -notmatch '^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$') { return $null }
+  $n = 0.0
+  if ([double]::TryParse($t, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { return $n }
+  return $null
+}
+# fold.pl leaves a row alone when a string in it is not JSON: a raw control
+# character, an escape JSON does not have, or a surrogate escape without its
+# other half. This parser repairs the surrogate to U+FFFD and lets the rest
+# through, so once a reply is parsed there is nothing left to see. Look at the
+# text before it is parsed instead: walk the rows of the first "data" array
+# with the same string-aware brace count fold.pl uses, and test every string
+# token. A row that names a field the fold reads twice is bad as well: this
+# parser keeps the last value and fold.pl the first, so the two would guess
+# differently. One $true or $false per row, in order.
+$foldReads = @('host', 'domain', 'reference', 'riskScore', 'detectionDate')
+function Test-JsonString($tok) {
+  if ($tok -match '[\x00-\x1f]') { return $false }
+  $high = $false; $highEnd = -1
+  foreach ($e in [regex]::Matches($tok, '(?s)\\(u[0-9a-fA-F]{4}|.)')) {
+    $v = $e.Groups[1].Value
+    if ($v.Length -eq 5) {
+      $cp = [Convert]::ToInt32($v.Substring(1), 16)
+      if ($cp -ge 0xD800 -and $cp -le 0xDBFF) { if ($high) { return $false }; $high = $true; $highEnd = $e.Index + 6; continue }
+      if ($cp -ge 0xDC00 -and $cp -le 0xDFFF) { if (-not $high -or $e.Index -ne $highEnd) { return $false }; $high = $false; continue }
+      if ($high) { return $false }
+      continue
+    }
+    if ($high -or $v -notmatch '^["\\/bfnrt]$') { return $false }
+  }
+  return (-not $high)
+}
+function Get-BadRows($text) {
+  $bad = New-Object System.Collections.ArrayList
+  $i = $text.IndexOf('"data"'); if ($i -lt 0) { return $bad }
+  $i = $text.IndexOf('[', $i); if ($i -lt 0) { return $bad }
+  $depth = 0; $rowBad = $false; $expectKey = $false; $seen = $null
+  foreach ($m in [regex]::Matches($text.Substring($i + 1), '(?s)"(?:[^"\\]|\\.)*"|[{}\[\],]')) {
+    $t = $m.Value
+    if ($t -eq ',') { if ($depth -eq 1) { $expectKey = $true }; continue }
+    if ($t[0] -eq '"') {
+      if ($depth -gt 0 -and -not (Test-JsonString $t)) { $rowBad = $true }
+      if ($depth -eq 1 -and $expectKey) {
+        # a key at the row's own level; decode it only when it carries an escape
+        $k = if ($t.Contains('\')) { try { $t | ConvertFrom-Json } catch { $t } } else { $t.Substring(1, $t.Length - 2) }
+        if ($foldReads -ccontains $k) { if ($seen.Contains($k)) { $rowBad = $true } else { [void]$seen.Add($k) } }
+        $expectKey = $false
+      }
+      continue
+    }
+    if ($t -eq '{' -or $t -eq '[') {
+      if ($depth -eq 0) { $rowBad = $false; $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal); $expectKey = ($t -eq '{') }
+      $depth++; continue
+    }
+    if ($depth -eq 0) { break }        # the ] that ends the array
+    $depth--
+    if ($depth -eq 0) { [void]$bad.Add($rowBad) }
+  }
+  return $bad
+}
+# Mark the rows Get-BadRows found, so Merge-Rows leaves them unfolded. The
+# mark is taken off again before the rows reach the report.
+function Set-Unfoldable($rows, $text) {
+  $bad = Get-BadRows $text
+  for ($j = 0; $j -lt $rows.Count -and $j -lt $bad.Count; $j++) {
+    if ($bad[$j] -and $rows[$j] -is [psobject]) {
+      $rows[$j] | Add-Member -NotePropertyName __unfoldable -NotePropertyValue $true -Force
+    }
+  }
+}
+# The row that stands for the group: highest score, then newest date, then
+# the one seen first. A missing score sits below every score, and a missing
+# date before every date.
+function Test-Better($sc, $d, $bestSc, $bestD) {
+  if ($null -ne $sc -and $null -eq $bestSc) { return $true }
+  if ($null -eq $sc -and $null -ne $bestSc) { return $false }
+  if ($null -ne $sc -and $sc -ne $bestSc) { return ($sc -gt $bestSc) }
+  if ($null -ne $d -and $null -eq $bestD) { return $true }
+  if ($null -eq $d -and $null -ne $bestD) { return $false }
+  if ($null -ne $d -and $d -ne $bestD) { return ($d -gt $bestD) }
+  return $false
+}
+function Merge-Rows($name, $found) {
+  if ($filtered -notcontains $name) { return @($found) }
+  # Every group keeps the place of its first row, so the order the API chose
+  # survives for the rows that are not folded.
+  $slots = New-Object System.Collections.ArrayList
+  # Ordinal, not the default hashtable: that one folds case, and the agreed
+  # rule lowercases ASCII only, so a key in another script must stay itself.
+  $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+  foreach ($row in $found) {
+    $k = if (Get-Prop $row '__unfoldable') { '' } else { Get-FoldKey $row }
+    if ($row -is [psobject]) { $row.PSObject.Properties.Remove('__unfoldable') }
+    if ($k -eq '') { [void]$slots.Add(@{ row = $row }); continue }
+    if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList; [void]$slots.Add(@{ key = $k }) }
+    [void]$groups[$k].Add($row)
+  }
+  $out = @()
+  foreach ($s in $slots) {
+    if ($s.ContainsKey('row')) { $out += $s.row; continue }
+    $g = $groups[$s.key]
+    if ($g.Count -lt 2) { $out += $g[0]; continue }
+    $best = $null; $bestSc = $null; $bestD = $null; $first = $null; $last = $null
+    foreach ($r in $g) {
+      $sc = Get-Num (Get-Prop $r 'riskScore'); $d = Get-Num (Get-Prop $r 'detectionDate')
+      if ($null -ne $d) {
+        if ($null -eq $first -or $d -lt $first) { $first = $d }
+        if ($null -eq $last -or $d -gt $last) { $last = $d }
+      }
+      if ($null -eq $best -or (Test-Better $sc $d $bestSc $bestD)) { $best = $r; $bestSc = $sc; $bestD = $d }
+    }
+    # foldCount is always 2 or more; a row standing for itself carries no markers
+    $best | Add-Member -NotePropertyName foldCount -NotePropertyValue ([int]$g.Count) -Force
+    if ($null -ne $first) {
+      $best | Add-Member -NotePropertyName foldFirst -NotePropertyValue ([long]$first) -Force
+      $best | Add-Member -NotePropertyName foldLast -NotePropertyValue ([long]$last) -Force
+    }
+    $out += $best
+  }
+  return @($out)
+}
+
 # Axur runs a search on its own side once started, so the five overlap if they
 # are all started first. Waiting for them one at a time cost the sum of five
 # waits; starting them together costs about the longest one.
@@ -468,10 +618,17 @@ function Complete-Search($job) {
     try { $r = Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
     $raw = $r.Content
     $o = $raw | ConvertFrom-Json
+    # A count that is not a number is no count. The shell script reads digits
+    # only and treats anything else as unknown; the same here, or a value like
+    # "unknown" would be written into the report's JSON bare and break it.
     $total = $o.result.status.totalResults
+    if ($null -eq (Get-Num $total)) { $total = $null }
     $running = [bool]$o.result.status.running
     if (-not $running -and $null -ne $total) { break }
   }
+  # Axur's own count, kept before any recount so the report can compare it
+  # with the rows that were actually in hand.
+  $reported = $total
   if ($null -eq $total) { Write-Host ("  {0,-26} timed out" -f $name) }
   elseif ($running) {
     Write-Host ("  {0,-26} at least $total (still searching after ${Wait}s)" -f $name)
@@ -491,6 +648,7 @@ function Complete-Search($job) {
   # Select-Object -First holding an array, and the run died on the first search
   # with "Cannot convert 'System.Object[]' to the type 'System.Int32'".
   $found = @(); if ($doc) { $found = @($doc.result.data) }
+  if ($filtered -contains $name) { Set-Unfoldable $found $raw }
 
   # A filtered number is only honest if it was counted over every row, so when a
   # filter is on we walk the pages. The API ignores page-size parameters, so
@@ -523,11 +681,14 @@ function Complete-Search($job) {
       # a real page beyond the cap is the one thing that means "there was more"
       if ($p -gt $PageCap) { $script:partial += $name; break }
       $prevKey = $pg
+      Set-Unfoldable $pr $pg
       $found += $pr
       $p++
     }
   }
 
+  $examined = $null
+  if ($filtered -contains $name) { $examined = $found.Count }
   if ($anyFilter -and $filtered -contains $name -and $found.Count) {
     $kept = @($found | Where-Object { Test-Keep $_ })
     Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
@@ -535,10 +696,28 @@ function Complete-Search($job) {
     $total = $kept.Count   # the tile and the table below it must agree
   }
 
+  # Fold after the filter has counted and before -Rows cuts, so the cap counts
+  # folded rows. pulled is the rows after the filter, folded the rows they
+  # became. foldPartial says the fold saw only part of the result: the count
+  # is unknown, the search was still running so the count is a floor, the
+  # page walk stopped short, or fewer rows were examined than Axur reported -
+  # which also covers a walk that ended because a page came back twice.
+  $pulled = $null; $folded = $null; $foldPartial = $false
+  if ($filtered -contains $name) {
+    $pulled = $found.Count
+    $found = @(Merge-Rows $name $found)
+    $folded = $found.Count
+    # the same test as fold.pl: a count that is not a number is unknown
+    $repNum = Get-Num $reported
+    $foldPartial = ($null -eq $repNum) -or ($script:incomplete -contains $name) -or
+                   ($script:partial -contains $name) -or ($examined -lt $repNum)
+  }
+
   $keep = @($found | Select-Object -First $Rows)
   $reply = @{ result = @{ status = @{ totalResults = $total }; data = $keep } }
   [pscustomobject]@{
     name = $name; query = $query; total = $total
+    reported = $reported; examined = $examined; pulled = $pulled; folded = $folded; foldPartial = $foldPartial
     raw = ($reply | ConvertTo-Json -Depth 12 -Compress)
   }
 }
@@ -595,10 +774,21 @@ function Protect-File($path) {
 
 function Esc($s) { ($s -replace '\\', '\\' -replace '"', '\"') }
 
-$totals = ($results | ForEach-Object {
-  '{"name":"' + (Esc $_.name) + '","query":"' + (Esc $_.query) + '","total":' +
-  $(if ($null -eq $_.total) { 'null' } else { "$($_.total)" }) + '}'
-}) -join ",`n"
+# The headline record of one search, without its closing brace: the totals
+# block prints it alone, the payload prints it with the reply behind it.
+# total is not the last field, so the report cuts the record at "reply".
+function Get-HeadJson($r) {
+  $h = '{"name":"' + (Esc $r.name) + '","query":"' + (Esc $r.query) + '","total":' +
+       $(if ($null -eq $r.total) { 'null' } else { "$($r.total)" })
+  if ($null -ne $r.examined) {
+    $h += ',"reported":' + $(if ($null -eq $r.reported) { 'null' } else { "$($r.reported)" }) +
+          ',"examined":' + $r.examined + ',"pulled":' + $r.pulled + ',"folded":' + $r.folded
+  }
+  if ($r.foldPartial) { $h += ',"foldPartial":1' }
+  return $h
+}
+
+$totals = ($results | ForEach-Object { (Get-HeadJson $_) + '}' }) -join ",`n"
 
 # One block per search, not one array holding all five. A single malformed
 # reply used to fail the one JSON.parse that fed every table, so one bad reply
@@ -607,8 +797,7 @@ $i = 0
 $payload = ($results | ForEach-Object {
   $i++
   '<script type="application/json" id="payload-' + $i + '">' +
-  '{"name":"' + (Esc $_.name) + '","query":"' + (Esc $_.query) + '","total":' +
-  $(if ($null -eq $_.total) { 'null' } else { "$($_.total)" }) + ',"reply":' +
+  (Get-HeadJson $_) + ',"reply":' +
   (Hide-Passwords ($_.raw -replace '</', '<\/')) + '}</script>'
 }) -join "`n"
 

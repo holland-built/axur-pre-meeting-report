@@ -197,14 +197,33 @@ lines()  { readable "$1" || return; grep -cF -- "$2" "$WORK/out/$1" || true; }
 linesx() { readable "$1" || return; grep -cE -- "$2" "$WORK/out/$1" || true; }
 hits()   { readable "$1" || return; grep -oF -- "$2" "$WORK/out/$1" | wc -l | tr -d ' '; }
 
-# The totals block, as five numbers, so a check reads one short string.
-tot() {
+# The totals block, as five numbers, so a check reads one short string. The
+# field is total unless another is named; a search without the field prints -.
+tot() { # tot FILE [FIELD]
   readable "$1" || return
   python3 -c "
 import json,sys
-s=open(sys.argv[1]).read()
+s=open(sys.argv[1]).read(); f=sys.argv[2]
 i=s.find('id=\"totals\"'); j=s.find('>',i)+1; k=s.find('</script>',j)
-print(','.join(str(t['total']) for t in json.loads(s[j:k])))" "$WORK/out/$1"
+print(','.join('null' if t.get(f,'-') is None else str(t.get(f,'-')) for t in json.loads(s[j:k])))" "$WORK/out/$1" "${2:-total}"
+}
+# One answer about the rows of one payload block:
+#   rows   how many rows the block holds
+#   folds  each row's foldCount, or - for a row standing for itself
+#   span   asc when a folded row's foldFirst is earlier than its foldLast
+#   risk   each row's riskScore, or - when it has none
+payq() { # payq FILE N QUESTION
+  readable "$1" || return
+  python3 -c "
+import json,sys
+s=open(sys.argv[1]).read(); n=sys.argv[2]; q=sys.argv[3]
+i=s.find('id=\"payload-%s\"'%n); j=s.find('>',i)+1; k=s.find('</script>',j)
+rs=json.loads(s[j:k], strict=False)['reply']['result']['data']
+if q=='rows': print(len(rs))
+elif q=='risk': print(','.join(str(r.get('riskScore','-')) for r in rs))
+elif q=='folds': print(','.join(str(r.get('foldCount','-')) for r in rs))
+elif q=='span': print(','.join(('asc' if r['foldFirst']<r['foldLast'] else 'flat') if 'foldFirst' in r else '-' for r in rs))
+else: print('no-such-question')" "$WORK/out/$1" "$2" "$3"
 }
 # The query the first search actually ran.
 qy() {
@@ -242,6 +261,9 @@ dom() { # dom FILE -> renders $WORK/out/FILE into $WORK/dom/FILE
 #   kind   ok when every row above the break is marked Readable
 #   place  ok when there is one break and it has a row above AND below it
 #   hi     how many rows carry the red high-risk mark
+#   fold   yes or no per row: does its first cell carry the fold note
+#   note   how many partial-fold notes sit above the table
+#   says   the text of that note
 domq() { # domq FILE SECTION QUESTION
   readable "$1" || return
   [ -s "$WORK/dom/$1" ] || { echo no-dom; return 1; }
@@ -252,6 +274,9 @@ from datetime import datetime
 s = open(sys.argv[1]).read(); sec = sys.argv[2]; q = sys.argv[3]
 m = re.search(r"<section[^>]*\bid=\"%s\"[^>]*>(.*?)</section>" % sec, s, re.S)
 if not m: print("no-section"); sys.exit()
+if q == "note": print(len(re.findall(r"class=\"foldnote\"", m.group(1)))); sys.exit()
+if q == "says":
+    n = re.search(r"class=\"foldnote\">(.*?)</p>", m.group(1), re.S); print(n.group(1) if n else "no-note"); sys.exit()
 m2 = re.search(r"<tbody>(.*?)</tbody>", m.group(1), re.S)
 if not m2: print("no-table"); sys.exit()
 above, below, brk, seen = [], [], 0, False
@@ -264,6 +289,13 @@ if q == "place":
     sys.exit()
 if q == "rows": print(len(above) + len(below)); sys.exit()
 if q == "hi": print(sum(1 for t in above + below if t.lstrip().startswith("class=\"hi\""))); sys.exit()
+if q == "fold": print(",".join("yes" if "class=\"sec fold\"" in t else "no" for t in above + below)); sys.exit()
+# The line under the table. "standing for" is the folded wording; without it
+# the section is counting raw records as though they were rows.
+if q == "foldwords":
+    mm = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S)
+    print("no-more" if not mm else ("yes" if "standing for" in mm.group(1) else "no"))
+    sys.exit()
 def risk(tr):
     r = re.search(r"class=\"risk[^\"]*\"><b>([\d.]+)</b>", tr); return float(r.group(1)) if r else None
 def date(tr):
@@ -533,6 +565,202 @@ if wrote "sh  low-risk report" low.html; then
     check "sh  phishing: no break row"     "$(domq low.html s3 brk)"  "0"
     check "sh  phishing: the rows are all still there" "$(domq low.html s3 rows)" "3"
   else skip "sh  phishing: no break row" "no Chrome"; skip "sh  phishing: the rows are all still there" "no Chrome"; fi
+fi
+
+echo "-- a repeated name folds into one row --"
+# Page 1 of each site search names one host four times and one host once.
+# Folded before the cap, --rows 2 keeps both rows and the first says "4 times".
+# Folded after it, the cap would keep two repeats and the row would say "2
+# times" for a site seen four times.
+serve FAKE_DUPES=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --rows 2 --out fo.html
+if wrote "sh  folded report" fo.html; then
+  check "sh  --rows 2 keeps two folded rows"             "$(payq fo.html 3 rows)"  "2"
+  check "sh  the folded row counts its four repeats"     "$(payq fo.html 3 folds)" "4,-"
+  check "sh  foldFirst is earlier than foldLast"         "$(payq fo.html 3 span)"  "asc,-"
+  check "sh  pulled is the raw count, folded the folded" "$(tot fo.html pulled)/$(tot fo.html folded)" "-,-,5,5,5/-,-,2,2,2"
+  check "sh  total is unchanged by the fold"             "$(tot fo.html)" "3412,2906,1184,78,31"
+  check "sh  foldPartial when pulled is under total"     "$(tot fo.html foldPartial)" "-,-,1,1,1"
+  if [ -n "$CHROME" ]; then
+    dom fo.html
+    check "sh  the folded row carries the note, the lone row does not" "$(domq fo.html s3 fold)" "yes,no"
+    check "sh  the partial note sits above the table"    "$(domq fo.html s3 note)" "1"
+  else skip "sh  the folded row carries the note, the lone row does not" "no Chrome"; skip "sh  the partial note sits above the table" "no Chrome"; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Rows 2 -Out fo2.html
+  if wrote "ps1 folded report" fo2.html; then
+    check "ps1 -Rows 2 keeps two folded rows"            "$(payq fo2.html 3 rows)"  "2"
+    check "ps1 the folded row counts its four repeats"   "$(payq fo2.html 3 folds)" "4,-"
+    check "ps1 foldFirst is earlier than foldLast"       "$(payq fo2.html 3 span)"  "asc,-"
+    check "ps1 pulled is the raw count, folded the folded" "$(tot fo2.html pulled)/$(tot fo2.html folded)" "-,-,5,5,5/-,-,2,2,2"
+    check "ps1 total is unchanged by the fold"           "$(tot fo2.html)" "3412,2906,1184,78,31"
+    check "ps1 foldPartial when pulled is under total"   "$(tot fo2.html foldPartial)" "-,-,1,1,1"
+  fi
+else
+  for c in "-Rows 2 keeps two folded rows" "the folded row counts its four repeats" "foldFirst is earlier than foldLast" \
+           "pulled is the raw count, folded the folded" "total is unchanged by the fold" "foldPartial when pulled is under total"; do skip "ps1 $c"; done
+fi
+# A filter walks every page and Axur's count matches the rows, so the fold
+# saw the whole result and there is nothing partial to say above the table.
+serve FAKE_DUPES=1 FAKE_EXACT=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out fp.html
+if wrote "sh  folded after a full walk" fp.html; then
+  check "sh  no foldPartial when every row was pulled"   "$(tot fp.html foldPartial)" "-,-,-,-,-"
+  check "sh  pulled is the recount, folded is fewer"     "$(tot fp.html pulled)/$(tot fp.html folded)/$(tot fp.html)" "-,-,11,11,11/-,-,8,8,8/3412,2906,11,11,11"
+  if [ -n "$CHROME" ]; then
+    dom fp.html
+    check "sh  no partial note above the table"          "$(domq fp.html s3 note)" "0"
+  else skip "sh  no partial note above the table" "no Chrome"; fi
+fi
+
+echo "-- foldPartial: the fold saw only part of the result --"
+# A filtered walk that hit the page cap. The filter recounts total from the
+# rows in hand, so pulled equals total by construction and cannot say so; the
+# note has to come from the walk itself, and reported keeps Axur's count.
+serve FAKE_PAGES=45
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out fc.html
+if wrote "sh  filtered walk at the cap" fc.html; then
+  check "sh  foldPartial on a filtered walk that hit the cap" "$(tot fc.html foldPartial)" "-,-,1,1,1"
+  check "sh  reported keeps Axur's count after a recount"     "$(tot fc.html reported)/$(tot fc.html)" "-,-,1184,78,31/3412,2906,120,120,120"
+fi
+# The note names what the fold covers: the rows the filter kept, not the rows
+# pulled. --min-score 40 drops the scores of 34 and 12, so the two differ.
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 40 --out fk.html
+if wrote "sh  filtered and partial" fk.html; then
+  if [ -n "$CHROME" ]; then
+    dom fk.html
+    check "sh  the note names the kept rows as what the fold covers" "$(domq fk.html s3 says)" \
+      "Axur reports 1,184 records; 120 of them were pulled, and the filter kept $(tot fk.html pulled | cut -d, -f3). Those $(tot fk.html pulled | cut -d, -f3) folded into $(tot fk.html folded | cut -d, -f3) rows. The \"times\" counts and dates cover those $(tot fk.html pulled | cut -d, -f3) records only; more may exist."
+    check "sh  the filter did drop rows"  "$([ "$(tot fk.html pulled | cut -d, -f3)" -lt 120 ] && echo yes || echo no)" "yes"
+  else skip "sh  the note names the kept rows as what the fold covers" "no Chrome"; skip "sh  the filter did drop rows" "no Chrome"; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 0 -Out fc2.html
+  if wrote "ps1 filtered walk at the cap" fc2.html; then
+    check "ps1 foldPartial on a filtered walk that hit the cap" "$(tot fc2.html foldPartial)" "-,-,1,1,1"
+    check "ps1 reported keeps Axur's count after a recount"     "$(tot fc2.html reported)/$(tot fc2.html)" "-,-,1184,78,31/3412,2906,120,120,120"
+  fi
+else skip "ps1 foldPartial on a filtered walk that hit the cap"; skip "ps1 reported keeps Axur's count after a recount"; fi
+# The count is unknown: the status carries no totalResults.
+serve FAKE_NOTOTAL=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out fu.html
+if wrote "sh  count unknown" fu.html; then
+  check "sh  foldPartial when the count is unknown"          "$(tot fu.html foldPartial)/$(tot fu.html reported)" "-,-,1,1,1/-,-,null,null,null"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out fu2.html
+  if wrote "ps1 count unknown" fu2.html; then
+    check "ps1 foldPartial when the count is unknown"        "$(tot fu2.html foldPartial)/$(tot fu2.html reported)" "-,-,1,1,1/-,-,null,null,null"
+  fi
+else skip "ps1 foldPartial when the count is unknown"; fi
+# Still running when the wait ran out. Filtered, and with Axur's count equal
+# to the rows on hand, so neither the recount nor the row count can be what
+# sets the note: only the floor can.
+serve FAKE_RUNNING=1 FAKE_EXACT=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out fs.html
+if wrote "sh  still running" fs.html; then
+  check "sh  foldPartial when the search was still running"  "$(tot fs.html foldPartial)/$(tot fs.html examined)/$(tot fs.html reported)" "-,-,1,1,1/-,-,9,9,9/-,-,9,9,9"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 0 -Out fs2.html
+  if wrote "ps1 still running" fs2.html; then
+    check "ps1 foldPartial when the search was still running" "$(tot fs2.html foldPartial)/$(tot fs2.html examined)/$(tot fs2.html reported)" "-,-,1,1,1/-,-,9,9,9/-,-,9,9,9"
+  fi
+else skip "ps1 foldPartial when the search was still running"; fi
+
+echo "-- the two scripts agree on odd rows --"
+# A capitalised key is not the key Axur sends; a lone surrogate escape and a
+# raw control character are not JSON. None of them folds, on either side.
+for K in Host surrogate control; do
+  serve FAKE_DUPES=1 FAKE_ODDROW=$K
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out "od$K.html"
+  if wrote "sh  $K: no row folds" "od$K.html"; then
+    check "sh  $K: no row folds"  "$(payq "od$K.html" 3 folds)" "-,-,-,-,-"
+  fi
+  if [ -n "$PWSH" ]; then
+    runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out "od${K}2.html"
+    if wrote "ps1 $K: no row folds" "od${K}2.html"; then
+      check "ps1 $K: no row folds" "$(payq "od${K}2.html" 3 folds)" "-,-,-,-,-"
+    fi
+  else skip "ps1 $K: no row folds"; fi
+done
+# A key written twice in one row: fold.pl would take the first value and
+# PowerShell's parser the last, so neither folds on it. With two hosts nothing
+# folds; with two scores that row stands alone and the other three fold.
+serve FAKE_DUPES=1 FAKE_ODDROW=duphost
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out oddh.html
+if wrote "sh  two hosts: no row folds" oddh.html; then
+  check "sh  two hosts: no row folds"   "$(payq oddh.html 3 folds)" "-,-,-,-,-"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out oddh2.html
+  if wrote "ps1 two hosts: no row folds" oddh2.html; then
+    check "ps1 two hosts: no row folds" "$(payq oddh2.html 3 folds)" "-,-,-,-,-"
+  fi
+else skip "ps1 two hosts: no row folds"; fi
+serve FAKE_DUPES=1 FAKE_ODDROW=duprisk
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out oddr.html
+if wrote "sh  two scores: the row stands alone" oddr.html; then
+  check "sh  two scores: the row stands alone"   "$(payq oddr.html 3 folds)/$(payq oddr.html 3 risk)" "-,3,-/5,91,34"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out oddr2.html
+  if wrote "ps1 two scores: the row stands alone" oddr2.html; then
+    check "ps1 two scores: the row stands alone" "$(payq oddr2.html 3 folds)/$(payq oddr2.html 3 risk)" "-,3,-/5,91,34"
+  fi
+else skip "ps1 two scores: the row stands alone"; fi
+# A count that is not a number is no count: foldPartial, and the run completes.
+serve FAKE_DUPES=1 FAKE_ODDTOTAL=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out oddt.html
+if wrote "sh  count is a word" oddt.html; then
+  check "sh  a count that is a word sets foldPartial"   "$(tot oddt.html foldPartial)/$(tot oddt.html reported)" "-,-,1,1,1/-,-,null,null,null"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out oddt2.html
+  if wrote "ps1 count is a word" oddt2.html; then
+    check "ps1 a count that is a word sets foldPartial" "$(tot oddt2.html foldPartial)/$(tot oddt2.html reported)" "-,-,1,1,1/-,-,null,null,null"
+  fi
+else skip "ps1 a count that is a word sets foldPartial"; fi
+# "NaN" is not a JSON number. Taken as one it never loses a comparison, and
+# the row carrying it would stand for the group.
+serve FAKE_DUPES=1 FAKE_ODDROW=nan
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out odnan.html
+if wrote "sh  NaN does not win" odnan.html; then
+  check "sh  NaN does not win"   "$(payq odnan.html 3 risk)" "91,34"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out odnan2.html
+  if wrote "ps1 NaN does not win" odnan2.html; then
+    check "ps1 NaN does not win" "$(payq odnan2.html 3 risk)" "91,34"
+  fi
+else skip "ps1 NaN does not win"; fi
+
+echo "-- without repeats, nothing folds --"
+serve FAKE_X=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out nf.html
+if wrote "sh  unfolded report" nf.html; then
+  check "sh  no row carries a fold count"                "$(payq nf.html 3 folds)" "-,-,-"
+  check "sh  folded equals pulled"                       "$(tot nf.html pulled)/$(tot nf.html folded)" "-,-,3,3,3/-,-,3,3,3"
+  if [ -n "$CHROME" ]; then
+    dom nf.html
+    check "sh  no row carries the fold note"             "$(domq nf.html s3 fold)" "no,no,no"
+  else skip "sh  no row carries the fold note" "no Chrome"; fi
+fi
+
+echo "-- the wording follows the search, not the rows on screen --"
+# The row that stands alone outscores the repeated ones, so it sorts to the top
+# and --rows 1 cuts the table before the folded group. Deciding from the rows on
+# screen, the section would say "the first 1 of 82 records" and count raw
+# records as though they were rows, which is the confusion the fold removes.
+serve FAKE_DUPES=1 FAKE_LONEFIRST=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --rows 1 --out lone.html
+if wrote "sh  lone-first report" lone.html; then
+  if [ -n "$CHROME" ]; then
+    dom lone.html
+    check "sh  the shown row stands alone"       "$(domq lone.html s3 fold)"      "no"
+    check "sh  the section still says it folded" "$(domq lone.html s3 foldwords)" "yes"
+  else skip "sh  the shown row stands alone" "no Chrome"; skip "sh  the section still says it folded" "no Chrome"; fi
 fi
 
 echo "-- the suite refuses a report this run did not write --"
