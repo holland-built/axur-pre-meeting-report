@@ -14,6 +14,8 @@
 #   --days N          only records Axur saw in the last N days (default 30).
 #                     A narrower window is a smaller result and a faster run
 #   --all-time        no date limit. Slower, and the count can run to thousands
+#   --check-days      ask the API whether it honours the --days filter at all,
+#                     then stop. One search, no report written
 #   --mask-passwords  print a password as its first and last character with
 #                     stars between, instead of in full
 #   --min-score N     drop rows scoring below N (lookalike and phishing only)
@@ -103,6 +105,7 @@ while [ $# -gt 0 ]; do
     --wait)       need_value "$1" $#; WAIT="$2"; shift 2 ;;
     --days)       need_value "$1" $#; DAYS="$2"; shift 2 ;;
     --all-time)   DAYS=0; shift ;;
+    --check-days) CHECKDAYS=1; shift ;;
     --mask-passwords) MASKPW=1; shift ;;
     --min-score)  need_value "$1" $#; MINSCORE="$2"; shift 2 ;;
     --exclude)    need_value "$1" $#; EXCLUDE="${EXCLUDE:+$EXCLUDE,}$2"; shift 2 ;;
@@ -318,6 +321,55 @@ IB_H=$(html_escape "$IB_DATA")
 SINCE=""
 if [ "$DAYS" -gt 0 ]; then
   SINCE=$(( ( $(date +%s) - DAYS * 86400 ) * 1000 ))
+fi
+
+
+# The date clause is the one thing here nobody has confirmed against the real
+# API. A field the API does not know can come back two ways: refused, which the
+# fallback below already handles, or accepted and quietly ignored, which nothing
+# can see. Then --days 30 reports all time and says nothing. This asks the
+# question directly: one search with a cutoff a year from now. Nothing can be
+# newer than that, so a working filter returns zero. Any other number means the
+# clause was thrown away.
+if [ -n "$CHECKDAYS" ]; then
+  FUTURE=$(( ( $(date +%s) + 365 * 86400 ) * 1000 ))
+  PROBE="emailDomain=\"$DOMAIN\" AND detectionDate>=$FUTURE"
+  echo "Asking Axur for records newer than a year from now."
+  echo "  $PROBE"
+  PESC=$(printf '%s' "$PROBE" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  PRAW=$(curl -s -w '\n%{http_code}' -X POST "$API/search" -H "@$AUTH" \
+         -H "Content-Type: application/json" \
+         -d "$(printf '{"query":"%s","source":"%s"}' "$PESC" "ttps")")
+  PCODE=$(printf '%s' "$PRAW" | tail -n1); PSTART=$(printf '%s' "$PRAW" | sed '$d')
+  PID=$(printf '%s' "$PSTART" | sed -n 's/.*"searchId":"\([^"]*\)".*/\1/p')
+  if [ -z "$PID" ]; then
+    echo ""
+    echo "The API refused the query (HTTP $PCODE)."
+    echo "That is the safe case: every run drops the date clause and warns once,"
+    echo "so the counts cover all time and the report says so."
+    exit 0
+  fi
+  PE=0; PR=""
+  while [ "$PE" -lt "$WAIT" ]; do
+    PR=$(curl -s "$API/search/$PID?page=1&alias=true" -H "@$AUTH")
+    printf '%s' "$PR" | grep -q '"running":false' && break
+    sleep 3; PE=$((PE+3))
+  done
+  PTOTAL=$(printf '%s' "$PR" | sed -n 's/.*"totalResults":\([0-9]*\).*/\1/p')
+  echo ""
+  if [ -z "$PTOTAL" ]; then
+    echo "No count came back in $WAIT seconds. Try again with a longer --wait."
+    exit 1
+  elif [ "$PTOTAL" -eq 0 ]; then
+    echo "Returned 0. The filter works, so --days really does narrow the window."
+    exit 0
+  else
+    echo "Returned $PTOTAL. Nothing can be newer than a year from now, so the API"
+    echo "is ignoring the date clause. Every --days run is silently covering all"
+    echo "time. Use --all-time so the report says so, and tell someone the field"
+    echo "name is wrong."
+    exit 1
+  fi
 fi
 
 start_search() { # start_search NAME SOURCE QUERY

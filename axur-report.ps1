@@ -13,6 +13,8 @@
     -Days N         only records Axur saw in the last N days (default 30).
                     A narrower window is a smaller result and a faster run
     -AllTime        no date limit. Slower, and the count can run to thousands
+    -CheckDays      ask the API whether it honours the -Days filter at all,
+                    then stop. One search, no report written
     -MaskPasswords  print a password as its first and last character with
                     stars between, instead of in full
     -MinScore N     drop rows scoring below N (lookalike and phishing only)
@@ -35,7 +37,7 @@
 param(
   [string]$Brand, [string]$Domain, [string]$ApiKey, [string]$Config, [string]$SaveConfig,
   [int]$Rows = 50, [int]$Wait = 300, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
-  [string]$Logo, [switch]$NoLogo, [switch]$DropOwn, [int]$Days = 30, [switch]$AllTime,
+  [string]$Logo, [switch]$NoLogo, [switch]$DropOwn, [int]$Days = 30, [switch]$AllTime, [switch]$CheckDays,
   [switch]$MaskPasswords, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
 )
 
@@ -152,6 +154,60 @@ if (-not $AllTime -and $Days -gt 0) {
   $since = [long]([DateTimeOffset]::UtcNow.AddDays(-$Days).ToUnixTimeMilliseconds())
 }
 $dateWarned = $false
+
+# The date clause is the one thing here nobody has confirmed against the real
+# API. A field the API does not know can come back two ways: refused, which the
+# fallback already handles, or accepted and quietly ignored, which nothing can
+# see. Then -Days 30 reports all time and says nothing. This asks the question
+# directly: one search with a cutoff a year from now. Nothing can be newer than
+# that, so a working filter returns zero.
+if ($CheckDays) {
+  $future = [long]([DateTimeOffset]::UtcNow.AddDays(365).ToUnixTimeMilliseconds())
+  $probe  = 'emailDomain="' + $Domain + '" AND detectionDate>=' + $future
+  Write-Host "Asking Axur for records newer than a year from now."
+  Write-Host "  $probe"
+  $pstart = $null
+  try {
+    $pstart = Invoke-RestMethod -Method Post -Uri "$api/search" -Headers $headers `
+              -ContentType "application/json" `
+              -Body (@{ query = $probe; source = "ttps" } | ConvertTo-Json -Compress)
+  } catch {
+    $pc = $null
+    if ($_.Exception.Response) { $pc = [int]$_.Exception.Response.StatusCode }
+    Write-Host ""
+    Write-Host "The API refused the query (HTTP $pc)."
+    Write-Host "That is the safe case: every run drops the date clause and warns once,"
+    Write-Host "so the counts cover all time and the report says so."
+    exit 0
+  }
+  if (-not $pstart.searchId) {
+    Write-Host ""
+    Write-Host "The API answered without a search id, so it would not take the query."
+    Write-Host "That is the safe case: every run drops the date clause and warns once."
+    exit 0
+  }
+  $pe = 0; $ptotal = $null
+  while ($pe -lt $Wait) {
+    try { $pr = Invoke-RestMethod -Uri "$api/search/$($pstart.searchId)?page=1&alias=true" -Headers $headers }
+    catch { Start-Sleep -Seconds 3; $pe += 3; continue }
+    if (-not $pr.result.status.running) { $ptotal = [int]$pr.result.status.totalResults; break }
+    Start-Sleep -Seconds 3; $pe += 3
+  }
+  Write-Host ""
+  if ($null -eq $ptotal) {
+    Write-Host "No count came back in $Wait seconds. Try again with a longer -Wait."
+    exit 1
+  } elseif ($ptotal -eq 0) {
+    Write-Host "Returned 0. The filter works, so -Days really does narrow the window."
+    exit 0
+  } else {
+    Write-Host "Returned $ptotal. Nothing can be newer than a year from now, so the API"
+    Write-Host "is ignoring the date clause. Every -Days run is silently covering all"
+    Write-Host "time. Use -AllTime so the report says so, and tell someone the field"
+    Write-Host "name is wrong."
+    exit 1
+  }
+}
 
 # Brandfetch serves a real logo to a request carrying a Referer. Baking it in as
 # a data URI means it survives the PDF, an offline mailbox, and blocked images.
