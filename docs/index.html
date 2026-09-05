@@ -256,12 +256,12 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
         <div class="getrow">
           <button class="get" data-os="mac"><span class="arw">&#8595;</span> Download for macOS</button>
           <button class="copy getcopy" data-os="mac">Copy the macOS script</button>
-          <a class="link raw" href="https://raw.githubusercontent.com/holland-built/axur-pre-meeting-report/v1.0/axur-report.sh">open it instead<span class="arw">&#8599;</span></a>
+          <a class="link raw" href="https://raw.githubusercontent.com/holland-built/axur-pre-meeting-report/v1.1/axur-report.sh">open it instead<span class="arw">&#8599;</span></a>
         </div>
         <div class="getrow">
           <button class="get" data-os="win"><span class="arw">&#8595;</span> Download for Windows</button>
           <button class="copy getcopy" data-os="win">Copy the Windows script</button>
-          <a class="link raw" href="https://raw.githubusercontent.com/holland-built/axur-pre-meeting-report/v1.0/axur-report.ps1">open it instead<span class="arw">&#8599;</span></a>
+          <a class="link raw" href="https://raw.githubusercontent.com/holland-built/axur-pre-meeting-report/v1.1/axur-report.ps1">open it instead<span class="arw">&#8599;</span></a>
         </div>
         <p class="note">Both buttons fetch the script from GitHub, so they need the network.
           If your machine blocks that, <b>open it instead</b>, select all, and paste it into a
@@ -285,6 +285,7 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
       <label class="opt"><input type="checkbox" data-f="--drop-own"><span class="opt-t">Drop their own domain</span><span class="opt-d">Their real site shows up as a lookalike of itself</span></label>
       <label class="opt"><input type="checkbox" data-f="--min-score 50"><span class="opt-t">Score 50 and up only</span><span class="opt-d">Drops rows Axur scored under 50. Score only, not liveness</span></label>
       <label class="opt"><input type="checkbox" data-f="--all-time"><span class="opt-t">Every record, not just the last 30 days</span><span class="opt-d">Slower, and the counts run a lot higher</span></label>
+      <label class="opt"><input type="checkbox" data-f="--check-days"><span class="opt-t">Just check the 30-day filter</span><span class="opt-d">One search, no report. Says whether Axur honours the date window</span></label>
       <label class="opt"><input type="checkbox" data-f="--mask-passwords"><span class="opt-t">Mask the passwords</span><span class="opt-d">Prints <code>h*****2</code> rather than the password itself</span></label>
       <label class="opt"><input type="checkbox" data-f="--rows 100"><span class="opt-t">100 rows under each count</span><span class="opt-d">Default is 50. More rows, longer PDF</span></label>
       <label class="opt"><input type="checkbox" data-f="--exclude-file known.csv"><span class="opt-t">Exclude a list of known domains</span><span class="opt-d">One per line in a <code>.csv</code>, in the folder you run from</span></label>
@@ -572,7 +573,7 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
   // buttons needed no network. They are fetched from a fixed tag instead. The
   // tag never moves, so the file that arrives is the one this guide describes.
   // If the fetch is blocked, the link under each button still works.
-  var SRC = 'https://raw.githubusercontent.com/holland-built/axur-pre-meeting-report/v1.0/';
+  var SRC = 'https://raw.githubusercontent.com/holland-built/axur-pre-meeting-report/v1.1/';
   var FILE = { mac: 'axur-report.sh', win: 'axur-report.ps1' };
   var cache = {};
 
