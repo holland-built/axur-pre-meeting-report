@@ -43,7 +43,7 @@ Key. Axur shows it once.
 | `--brand "BRAND"` | `-Brand` | Brand, as Axur spells it |
 | `--domain customer.com` | `-Domain` | Customer domain |
 | `--key` | `-ApiKey` | Your API key |
-| `--rows 50` | `-Rows` | Rows listed under each count |
+| `--rows 50` | `-Rows` | Rows listed under each count. A folded row counts as one |
 | `--wait 300` | `-Wait` | Seconds to let each search finish before reading its count |
 | `--days 30` | `-Days` | Only records Axur saw in the last N days. Default 30 |
 | `--all-time` | `-AllTime` | No date limit. Slower, and the counts run higher |
@@ -85,7 +85,10 @@ exclude-file = ~/known/larkspur-owned.csv
 |---|---|
 | Filters | Filters touch the three domain searches only. A credential has no score. |
 | Date window | The run covers the last 30 days by default, which keeps it quick. `--all-time` drops the limit. If Axur rejects the date clause the script says so once and covers all time anyway. |
-| Filtered counts | The script recounts a filtered headline over the rows that survive, so the number and the table agree. |
+| Filtered counts | The script recounts a filtered headline over the rows that survive, so the number and the table agree. Each filtered section says how many records it examined, how many it kept and how many it filtered out, and what the filter was. |
+| Row order | High-risk rows lead, then a line across the table, then the rest by the day Axur found them. The credentials table has no score, so it leads on readable passwords instead. |
+| One row per name | A site seen many times is one row saying how many times and between which dates. An account is one row saying how many times and across how many sites. The headline count still counts every record. |
+| What a fold covers | The fold sees the rows in hand, which is one page unless a filter made the script walk more. Where that is not the whole result the section says so, above the table. |
 | `--wait` | `--wait` bounds each search. The script reports anything still running as "at least N", on the terminal and in the report. |
 | Impersonated brand | Read the Impersonated brand column before sending. That search matches any brand whose name contains the word. |
 | PDF bookmarks | The PDF has no bookmark pane, because Chrome writes no outline. Every table header carries a "Top" link instead. |
