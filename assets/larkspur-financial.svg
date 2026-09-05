@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="150" viewBox="0 0 560 150">
+  <g fill="none" stroke="#2f4a7a" stroke-width="9" stroke-linecap="round">
+    <path d="M40 112 V52"/>
+    <path d="M40 78 C 62 44, 86 44, 104 62"/>
+    <path d="M40 96 C 66 70, 92 70, 112 88"/>
+  </g>
+  <text x="140" y="98" font-family="Georgia, 'Times New Roman', serif" font-size="54"
+        letter-spacing="1" fill="#2f4a7a">Larkspur</text>
+  <text x="141" y="126" font-family="Helvetica, Arial, sans-serif" font-size="19"
+        letter-spacing="6.5" fill="#7a869c">FINANCIAL</text>
+</svg>
