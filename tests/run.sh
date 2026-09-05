@@ -288,6 +288,8 @@ dom() { # dom FILE -> renders $WORK/out/FILE into $WORK/dom/FILE
 #   pw     per row: the password shown
 #   cnt    the count line in the section heading
 #   more   the text under the table, or in place of it
+#   filt   the filter sentence in that text, from "The report examined" to
+#          "count above.", or no-filt when the section carries none
 domq() { # domq FILE SECTION QUESTION
   readable "$1" || return
   [ -s "$WORK/dom/$1" ] || { echo no-dom; return 1; }
@@ -305,6 +307,11 @@ if q == "cnt":
     n = re.search(r"class=\"cnt\"[^>]*>(.*?)</span>", m.group(1), re.S); print(n.group(1) if n else "no-cnt"); sys.exit()
 if q == "more":
     n = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S); print(n.group(1) if n else "no-more"); sys.exit()
+if q == "filt":
+    n = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S)
+    if not n: print("no-more"); sys.exit()
+    f = re.search(r"The report examined .*?(?: kept are the count above| came back to be examined| nothing to filter)\.", n.group(1), re.S)
+    print(f.group(0) if f else "no-filt"); sys.exit()
 m2 = re.search(r"<tbody>(.*?)</tbody>", m.group(1), re.S)
 if not m2: print("no-table"); sys.exit()
 above, below, brk, seen, brks = [], [], 0, False, []
@@ -733,6 +740,158 @@ if [ -n "$PWSH" ]; then
     check "ps1 foldPartial when the search was still running" "$(tot fs2.html foldPartial)/$(tot fs2.html examined)/$(tot fs2.html reported)" "1,1,1,1,1/3,3,9,9,9/3412,2906,9,9,9"
   fi
 else skip "ps1 foldPartial when the search was still running"; fi
+
+echo "-- say what was dropped --"
+# A row removed by --min-score or --exclude used to leave no trace unless the
+# fold was also short. Now a filtered section carries dropped (examined minus
+# pulled, zero included) and says both numbers, what the filter was, and that
+# the kept count is the headline. An unfiltered search carries no dropped at
+# all, and absent is not zero: its section must not read as though a filter
+# ran and found nothing. The cover says the filter touched the three site
+# searches only.
+# Page 1 repeats one host (91, 40, 66, 12) and one stands alone (34); pages 2
+# and 3 hold 78, 12, 66 and 12, 66, 55. --min-score 40 drops the four scores
+# under 40 and the exclusion drops larkspur1-p2.example (78): 11 examined, 5
+# filtered out, 6 kept. Axur's count equals the rows, so the fold is complete
+# and there is no partial note: this is the case that said nothing before.
+FILT='The report examined 11 records and filtered out 5 of them: records scoring below 40, and records naming a site that contains "larkspur1-p2.example". The 6 kept are the count above.'
+serve FAKE_DUPES=1 FAKE_EXACT=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 40 --exclude Larkspur1-P2.EXAMPLE --out dr.html
+if wrote "sh  filter dropped rows, fold complete" dr.html; then
+  check "sh  dropped is examined minus pulled, site searches only" "$(tot dr.html dropped)/$(tot dr.html examined)/$(tot dr.html pulled)" "-,-,5,5,5/3,3,11,11,11/3,3,6,6,6"
+  check "sh  the kept count is the headline"          "$(tot dr.html)" "3412,2906,6,6,6"
+  check "sh  the fold was complete"                   "$(tot dr.html foldPartial)" "1,1,-,-,-"
+  if [ -n "$CHROME" ]; then
+    dom dr.html
+    check "sh  no partial note, yet the section says what was filtered out" "$(domq dr.html s3 note)/$(domq dr.html s3 filt)" "0/$FILT"
+    check "sh  the heading carries both numbers"      "$(domq dr.html s3 cnt)" "<b>6</b> kept of 11 examined · 5 filtered out · 4 rows shown, standing for 6"
+    check "sh  the cover scopes the filter to the site searches" "$(domfoot dr.html 'The two credential searches are unfiltered.')" "1"
+    check "sh  the credential section carries no filter sentence" "$(domq dr.html s1 filt)" "no-filt"
+  else for c in "no partial note, yet the section says what was filtered out" "the heading carries both numbers" "the cover scopes the filter to the site searches" "the credential section carries no filter sentence"; do skip "sh  $c" "no Chrome"; done; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 40 -Exclude Larkspur1-P2.EXAMPLE -Out dr2.html
+  if wrote "ps1 filter dropped rows, fold complete" dr2.html; then
+    check "ps1 dropped is examined minus pulled, site searches only" "$(tot dr2.html dropped)/$(tot dr2.html examined)/$(tot dr2.html pulled)" "-,-,5,5,5/3,3,11,11,11/3,3,6,6,6"
+    check "ps1 the kept count is the headline"        "$(tot dr2.html)" "3412,2906,6,6,6"
+    if [ -n "$CHROME" ]; then
+      dom dr2.html
+      check "ps1 no partial note, yet the section says what was filtered out" "$(domq dr2.html s3 note)/$(domq dr2.html s3 filt)" "0/$FILT"
+      check "ps1 the heading carries both numbers"    "$(domq dr2.html s3 cnt)" "<b>6</b> kept of 11 examined · 5 filtered out · 4 rows shown, standing for 6"
+      check "ps1 the cover scopes the filter to the site searches" "$(domfoot dr2.html 'The two credential searches are unfiltered.')" "1"
+    else for c in "no partial note, yet the section says what was filtered out" "the heading carries both numbers" "the cover scopes the filter to the site searches"; do skip "ps1 $c" "no Chrome"; done; fi
+  fi
+else for c in "dropped is examined minus pulled, site searches only" "the kept count is the headline" "no partial note, yet the section says what was filtered out" "the heading carries both numbers" "the cover scopes the filter to the site searches"; do skip "ps1 $c"; done; fi
+# A filter that dropped nothing says zero, not nothing.
+serve FAKE_X=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out dz.html
+if wrote "sh  filter dropped nothing" dz.html; then
+  check "sh  dropped is zero, not absent"             "$(tot dz.html dropped)" "-,-,0,0,0"
+  if [ -n "$CHROME" ]; then
+    dom dz.html
+    check "sh  the section says zero were filtered out" "$(domq dz.html s3 filt)" "The report examined 9 records and filtered out 0 of them: records scoring below 0. The 9 kept are the count above."
+    check "sh  the heading says zero were filtered out" "$(domq dz.html s3 cnt)" "<b>9</b> kept of 9 examined · 0 filtered out · all shown"
+  else skip "sh  the section says zero were filtered out" "no Chrome"; skip "sh  the heading says zero were filtered out" "no Chrome"; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 0 -Out dz2.html
+  if wrote "ps1 filter dropped nothing" dz2.html; then
+    check "ps1 dropped is zero, not absent"           "$(tot dz2.html dropped)" "-,-,0,0,0"
+    if [ -n "$CHROME" ]; then
+      dom dz2.html
+      check "ps1 the section says zero were filtered out" "$(domq dz2.html s3 filt)" "The report examined 9 records and filtered out 0 of them: records scoring below 0. The 9 kept are the count above."
+    else skip "ps1 the section says zero were filtered out" "no Chrome"; fi
+  fi
+else skip "ps1 dropped is zero, not absent"; skip "ps1 the section says zero were filtered out"; fi
+# No filter: no dropped, no sentence, no cover note, and the heading counts
+# records as before.
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out dn.html
+if wrote "sh  no filter" dn.html; then
+  check "sh  no dropped without a filter"             "$(tot dn.html dropped)" "-,-,-,-,-"
+  if [ -n "$CHROME" ]; then
+    dom dn.html
+    check "sh  no filter sentence without a filter"   "$(domq dn.html s3 filt)/$(domq dn.html s3 cnt)" "no-filt/<b>1,184</b> records · first 3 shown"
+    check "sh  no cover note without a filter"        "$(domfoot dn.html 'The two credential searches are unfiltered.')" "0"
+  else skip "sh  no filter sentence without a filter" "no Chrome"; skip "sh  no cover note without a filter" "no Chrome"; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out dn2.html
+  if wrote "ps1 no filter" dn2.html; then
+    check "ps1 no dropped without a filter"           "$(tot dn2.html dropped)" "-,-,-,-,-"
+    if [ -n "$CHROME" ]; then
+      dom dn2.html
+      check "ps1 no filter sentence without a filter" "$(domq dn2.html s3 filt)/$(domq dn2.html s3 cnt)" "no-filt/<b>1,184</b> records · first 3 shown"
+    else skip "ps1 no filter sentence without a filter" "no Chrome"; fi
+  fi
+else skip "ps1 no dropped without a filter"; skip "ps1 no filter sentence without a filter"; fi
+
+# An empty page. Both scripts recount it to 0: examined 0, pulled 0, dropped 0.
+# With Axur still reporting 1,184 for it, that number must not stand as "kept":
+# the heading says 0 kept and 0 examined, and the sentence names Axur's count
+# as records that never came back. filter.pl used to fail on an empty array,
+# and PowerShell used to skip the recount and leave 1,184 as the headline.
+for E in 1 2; do
+  case "$E" in 1) REP="3412,2906,0,0,0"; SAYS="The report examined 0 records, so there was nothing to filter." ;;
+               *) REP="3412,2906,1184,78,31"; SAYS="The report examined 0 records, so there was nothing to filter; Axur reports 1,184 for this search, but no records came back to be examined." ;; esac
+  serve FAKE_EMPTY=$E
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out "de$E.html"
+  if wrote "sh  empty page, total case $E" "de$E.html"; then
+    check "sh  empty page $E: examined, pulled, dropped are 0 and kept is 0" "$(tot "de$E.html" examined)/$(tot "de$E.html" pulled)/$(tot "de$E.html" dropped)/$(tot "de$E.html")/$(tot "de$E.html" reported)" "3,3,0,0,0/3,3,0,0,0/-,-,0,0,0/3412,2906,0,0,0/$REP"
+    if [ -n "$CHROME" ]; then
+      dom "de$E.html"
+      check "sh  empty page $E: the heading does not present Axur's count as kept" "$(domq "de$E.html" s3 cnt)/$(domq "de$E.html" s3 filt)" "<b>0</b> kept · 0 examined/$SAYS"
+    else skip "sh  empty page $E: the heading does not present Axur's count as kept" "no Chrome"; fi
+  fi
+  if [ -n "$PWSH" ]; then
+    runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 0 -Out "de${E}2.html"
+    if wrote "ps1 empty page, total case $E" "de${E}2.html"; then
+      check "ps1 empty page $E: examined, pulled, dropped are 0 and kept is 0" "$(tot "de${E}2.html" examined)/$(tot "de${E}2.html" pulled)/$(tot "de${E}2.html" dropped)/$(tot "de${E}2.html")/$(tot "de${E}2.html" reported)" "3,3,0,0,0/3,3,0,0,0/-,-,0,0,0/3412,2906,0,0,0/$REP"
+      if [ -n "$CHROME" ]; then
+        dom "de${E}2.html"
+        check "ps1 empty page $E: the heading does not present Axur's count as kept" "$(domq "de${E}2.html" s3 cnt)/$(domq "de${E}2.html" s3 filt)" "<b>0</b> kept · 0 examined/$SAYS"
+      else skip "ps1 empty page $E: the heading does not present Axur's count as kept" "no Chrome"; fi
+    fi
+  else skip "ps1 empty page $E: examined, pulled, dropped are 0 and kept is 0"; skip "ps1 empty page $E: the heading does not present Axur's count as kept"; fi
+done
+# The exclusion file. Quotes around a value come off, as a CSV export wraps a
+# field, and the pattern is the same in both scripts: two rows filtered, two
+# names in the criteria. A quote INSIDE a value is refused by both, naming the
+# line, so neither script can filter on a pattern the other did not.
+printf 'domain\r\n"Larkspur1-P2.EXAMPLE"  # the customer\r\n%s\n\n' "'larkspur2-p3.example',extra column" > "$WORK/excl.txt"
+printf 'lark"spur.example\nlarkspur2-p3.example\n' > "$WORK/exclbad.txt"
+# A formfeed beside a quoted value. Both scripts trim space and tab from the
+# ends and nothing else, so neither takes the formfeed off, both then see the
+# quote inside the value, and both refuse. The shell used to trim every kind of
+# whitespace, so it read this line as a pattern while the ps1 refused the file.
+printf '\f"larkspur1-p2.example"\nlarkspur2-p3.example\n' > "$WORK/exclff.txt"
+XSAYS='The report examined 9 records and filtered out 2 of them: records naming a site that contains "larkspur1-p2.example", "larkspur2-p3.example". The 7 kept are the count above.'
+serve FAKE_X=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --exclude-file "$WORK/excl.txt" --out dx.html
+if wrote "sh  exclusion file with quoted values" dx.html; then
+  check "sh  quoted values filter two rows"          "$(tot dx.html dropped)/$(tot dx.html)" "-,-,2,2,2/3412,2906,7,7,7"
+  if [ -n "$CHROME" ]; then
+    dom dx.html
+    check "sh  the criteria name both patterns, unquoted and lowercased" "$(domq dx.html s3 filt)" "$XSAYS"
+  else skip "sh  the criteria name both patterns, unquoted and lowercased" "no Chrome"; fi
+fi
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --exclude-file "$WORK/exclff.txt" --out dxf.html
+check "sh  a formfeed beside a quote is refused, not trimmed" "$LAST_RC/$(grep -c 'quote inside a value' "$LAST_LOG")/$([ -e "$WORK/out/dxf.html" ] && echo file || echo no-file)" "1/1/no-file"
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --exclude-file "$WORK/exclbad.txt" --out dxb.html
+check "sh  a quote inside a value stops the run and names the line" "$LAST_RC/$(grep -c 'quote inside a value' "$LAST_LOG")/$(grep -c 'line 1: lark"spur.example' "$LAST_LOG")/$([ -e "$WORK/out/dxb.html" ] && echo file || echo no-file)" "1/1/1/no-file"
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -ExcludeFile "$WORK/excl.txt" -Out dx2.html
+  if wrote "ps1 exclusion file with quoted values" dx2.html; then
+    check "ps1 quoted values filter two rows"        "$(tot dx2.html dropped)/$(tot dx2.html)" "-,-,2,2,2/3412,2906,7,7,7"
+    if [ -n "$CHROME" ]; then
+      dom dx2.html
+      check "ps1 the criteria name both patterns, unquoted and lowercased" "$(domq dx2.html s3 filt)" "$XSAYS"
+    else skip "ps1 the criteria name both patterns, unquoted and lowercased" "no Chrome"; fi
+  fi
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -ExcludeFile "$WORK/exclff.txt" -Out dxf2.html
+  check "ps1 a formfeed beside a quote is refused, not trimmed" "$LAST_RC/$(grep -c 'quote inside a value' "$LAST_LOG")/$([ -e "$WORK/out/dxf2.html" ] && echo file || echo no-file)" "1/1/no-file"
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -ExcludeFile "$WORK/exclbad.txt" -Out dxb2.html
+  check "ps1 a quote inside a value stops the run and names the line" "$LAST_RC/$(grep -c 'quote inside a value' "$LAST_LOG")/$(grep -c 'line 1: lark"spur.example' "$LAST_LOG")/$([ -e "$WORK/out/dxb2.html" ] && echo file || echo no-file)" "1/1/1/no-file"
+else for c in "quoted values filter two rows" "the criteria name both patterns, unquoted and lowercased" "a formfeed beside a quote is refused, not trimmed" "a quote inside a value stops the run and names the line"; do skip "ps1 $c"; done; fi
 
 echo "-- the two scripts agree on odd rows --"
 # A capitalised key is not the key Axur sends; a lone surrogate escape and a

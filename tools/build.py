@@ -341,13 +341,46 @@ if ($DropOwn) { $patterns += ConvertTo-AsciiLower $Domain }
 # header row is skipped, so a sheet exported straight from Excel works.
 if ($ExcludeFile) {
   if (-not (Test-Path $ExcludeFile)) { Write-Error "Cannot read $ExcludeFile"; exit 1 }
-  $fromFile = Get-Content $ExcludeFile | ForEach-Object {
-    ($_ -replace '#.*', '').Split(',')[0].Trim().Trim('"').Trim("'")
-  } | Where-Object { $_ -and $_ -notmatch '^(?i)domains?$' }
+  # One value per line: the comment and the rest of a CSV row cut off, then
+  # spaces and quotes taken off both ENDS only, as a CSV export wraps a field.
+  # A quote left INSIDE the value is a line the script cannot read as a domain,
+  # and it stops the run and names the line rather than guess. The shell script
+  # used to delete every quote wherever it stood, so a quote mid-line gave the
+  # two scripts different patterns, different rows filtered and different
+  # criteria printed. axur-report.sh applies the same rule; change one and
+  # change the other.
+  $lines = @(Get-Content $ExcludeFile); $fromFile = @(); $badQ = @()
+  for ($ln = 0; $ln -lt $lines.Count; $ln++) {
+    # Space and tab, named exactly, and the same two axur-report.sh names with
+    # [[:blank:]]. The wider whitespace class there also took a formfeed off the
+    # ends, so a line with one beside a quote was read by one script and refused
+    # by the other.
+    $v = ($lines[$ln] -replace '#.*', '').Split(',')[0].Trim(@(' ', "`t", '"', "'"))
+    if ($v -match '["'']') { $badQ += "  line $($ln + 1): $v"; continue }
+    if ($v -and $v -notmatch '^(?i)domains?$') { $fromFile += $v }
+  }
+  if ($badQ.Count) {
+    Write-Error ("-ExcludeFile $ExcludeFile has a quote inside a value. One pattern per line, quotes only around it:`n" + ($badQ -join "`n"))
+    exit 1
+  }
   $patterns += @($fromFile | ForEach-Object { ConvertTo-AsciiLower $_ })
   Write-Host "Excluding $($patterns.Count) patterns from $ExcludeFile"
 }
 $anyFilter = ($MinScore -or $patterns.Count)
+
+# What the local filter was, in the reader's words, for the report. -MinScore
+# and -Exclude run here after the reply arrives, so the Axur query printed
+# above each table never shows them; the report puts this text beside the
+# count of what was filtered out. $patterns is already ASCII-lowercased, as
+# the match is, so both scripts print the same list. Empty when no filter runs.
+# axur-report.sh builds FILTERDESC by the same rule; change one and change the
+# other.
+$filterText = ''
+if ($MinScore) { $filterText = "records scoring below $MinScore" }
+if ($patterns.Count) {
+  $filterText = $(if ($filterText) { "$filterText, and " } else { '' }) +
+    'records naming a site that contains ' + (($patterns | ForEach-Object { '"' + $_ + '"' }) -join ', ')
+}
 $partial = @(); $incomplete = @()
 
 # Keep a row unless the score is below the floor or a pattern matches its
@@ -833,7 +866,10 @@ function Complete-Search($job) {
 
   $examined = $null
   if ($foldable -contains $name) { $examined = $found.Count }
-  if ($anyFilter -and $filtered -contains $name -and $found.Count) {
+  # An empty page is recounted like any other, to 0. Skipping it left Axur's
+  # count standing as the headline beside "0 examined", a count of records
+  # that were never in hand. filter.pl in axur-report.sh does the same.
+  if ($anyFilter -and $filtered -contains $name) {
     $kept = @($found | Where-Object { Test-Keep $_ })
     Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
     $found = $kept
@@ -847,8 +883,14 @@ function Complete-Search($job) {
   # page walk stopped short, or fewer rows were examined than Axur reported -
   # which also covers a walk that ended because a page came back twice.
   $pulled = $null; $folded = $null; $foldPartial = $false; $hashed = $null; $hashedFolded = $null
+  # dropped: examined minus pulled, ONLY for a search a local filter ran on.
+  # Zero when it dropped nothing; absent when no local filter applies to the
+  # search. The report treats those two differently, so never write a zero
+  # for a search the filter does not touch. fold.pl writes the same field.
+  $dropped = $null
   if ($foldable -contains $name) {
     $pulled = $found.Count
+    if ($anyFilter -and $filtered -contains $name) { $dropped = [int]($examined - $pulled) }
     if ($byAccount -contains $name) { $hashed, $hashedFolded = Get-HashedCounts $found }
     $found = @(Merge-Rows $name $found)
     $folded = $found.Count
@@ -863,7 +905,7 @@ function Complete-Search($job) {
   [pscustomobject]@{
     name = $name; query = $query; total = $total
     reported = $reported; examined = $examined; pulled = $pulled; folded = $folded; foldPartial = $foldPartial
-    hashed = $hashed; hashedFolded = $hashedFolded
+    dropped = $dropped; hashed = $hashed; hashedFolded = $hashedFolded
     raw = ($reply | ConvertTo-Json -Depth 12 -Compress)
   }
 }
@@ -897,7 +939,8 @@ $head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAI
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
               Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy')).
               Replace('{{CAVEAT}}', (ConvertTo-HtmlText $CAVEAT)).
-              Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE))
+              Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE)).
+              Replace('{{FILTER}}', (ConvertTo-HtmlText $filterText))
 $tail = $tail.Replace('ROWSVALUE', "$Rows")
 
 # The files about to be written hold the customer's leaked passwords in full.
@@ -930,6 +973,8 @@ function Get-HeadJson($r) {
     $h += ',"reported":' + $(if ($null -eq $r.reported) { 'null' } else { "$($r.reported)" }) +
           ',"examined":' + $r.examined + ',"pulled":' + $r.pulled + ',"folded":' + $r.folded
   }
+  # the filtered searches only, zero included; the same place in the order as fold.pl
+  if ($null -ne $r.dropped) { $h += ',"dropped":' + $r.dropped }
   # the two credential searches only; the same place in the order as fold.pl
   if ($null -ne $r.hashed) { $h += ',"hashed":' + $r.hashed + ',"hashedFolded":' + $r.hashedFolded }
   if ($r.foldPartial) { $h += ',"foldPartial":1' }
@@ -1064,7 +1109,8 @@ def build_powershell(sh_text):
     # the shell interpolates these; PowerShell will .Replace() them instead
     for var, ph in (("BRAND_H", "{{BRAND}}"), ("DOMAIN_H", "{{DOMAIN}}"),
                     ("LOGO_H", "{{LOGO}}"), ("OURS_H", "{{OURS}}"), ("IB_H", "{{IB}}"),
-                    ("CAVEAT", "{{CAVEAT}}"), ("PWNOTE", "{{PWNOTE}}")):
+                    ("CAVEAT", "{{CAVEAT}}"), ("PWNOTE", "{{PWNOTE}}"),
+                    ("FILTER_H", "{{FILTER}}")):
         head = head.replace("${%s}" % var, ph).replace("$" + var, ph)
 
     # Only the escaped names belong in the page. Mapping the raw names here as

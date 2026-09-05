@@ -45,6 +45,9 @@ Behaviour is steered by environment variables so one server covers every test:
                     is the deepest row both scripts read and 64 the first they refuse.
                     The envelope adds four levels, so 1020 is the deepest page
                     PowerShell's parser reads at all and 1021 the first it refuses
+  FAKE_EMPTY=1      every page of a signal-lake search is an empty array, and
+                    totalResults is 0; FAKE_EMPTY=2 the same empty pages with
+                    the usual non-zero totalResults, which is the misleading case
   FAKE_CREDMIX=KIND page 1 of the first credential search holds an account with
                     2 PLAIN rows and 3 hashed rows, a row of that account with
                     no passwordType, and a row whose passwordType is a lone
@@ -78,6 +81,7 @@ CREDDUPES = os.environ.get("FAKE_CREDDUPES") == "1"  # page 1 repeats one accoun
 CREDODD  = os.environ.get("FAKE_CREDODD", "")      # xss | sitecase | many, see above
 CREDMIX  = os.environ.get("FAKE_CREDMIX", "")      # mixed | all, see above
 DEEP     = int(os.environ.get("FAKE_DEEP", "0"))     # nest "extra" this many arrays deep
+EMPTY    = int(os.environ.get("FAKE_EMPTY", "0"))    # 1: empty pages, total 0; 2: empty pages, total as usual
 FILTERROW = os.environ.get("FAKE_FILTERROW", "")   # escquote | unicode | score5x | casefold | missing | null | twice | comma | nanlit | zero | formfeed
 LOG      = open(os.environ.get("FAKE_LOG", "/dev/null"), "a")
 
@@ -277,6 +281,9 @@ def body(sid, page):
         rows = cred_mix((meta["n"] - 1) % 5 + 1)
     rows = strip_scores(rows)
     n = TOTALS[(meta["n"] - 1) % 5]
+    if EMPTY and meta.get("source") == "signal-lake":
+        rows = []
+        if EMPTY == 1: n = 0
     if EXACT and meta.get("source") == "signal-lake":
         n = 3 * PAGES + (2 if DUPES else 0)
     status = {"running": RUNNING, "totalResults": "unknown" if ODDTOTAL else n}

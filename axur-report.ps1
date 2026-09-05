@@ -322,13 +322,46 @@ if ($DropOwn) { $patterns += ConvertTo-AsciiLower $Domain }
 # header row is skipped, so a sheet exported straight from Excel works.
 if ($ExcludeFile) {
   if (-not (Test-Path $ExcludeFile)) { Write-Error "Cannot read $ExcludeFile"; exit 1 }
-  $fromFile = Get-Content $ExcludeFile | ForEach-Object {
-    ($_ -replace '#.*', '').Split(',')[0].Trim().Trim('"').Trim("'")
-  } | Where-Object { $_ -and $_ -notmatch '^(?i)domains?$' }
+  # One value per line: the comment and the rest of a CSV row cut off, then
+  # spaces and quotes taken off both ENDS only, as a CSV export wraps a field.
+  # A quote left INSIDE the value is a line the script cannot read as a domain,
+  # and it stops the run and names the line rather than guess. The shell script
+  # used to delete every quote wherever it stood, so a quote mid-line gave the
+  # two scripts different patterns, different rows filtered and different
+  # criteria printed. axur-report.sh applies the same rule; change one and
+  # change the other.
+  $lines = @(Get-Content $ExcludeFile); $fromFile = @(); $badQ = @()
+  for ($ln = 0; $ln -lt $lines.Count; $ln++) {
+    # Space and tab, named exactly, and the same two axur-report.sh names with
+    # [[:blank:]]. The wider whitespace class there also took a formfeed off the
+    # ends, so a line with one beside a quote was read by one script and refused
+    # by the other.
+    $v = ($lines[$ln] -replace '#.*', '').Split(',')[0].Trim(@(' ', "`t", '"', "'"))
+    if ($v -match '["'']') { $badQ += "  line $($ln + 1): $v"; continue }
+    if ($v -and $v -notmatch '^(?i)domains?$') { $fromFile += $v }
+  }
+  if ($badQ.Count) {
+    Write-Error ("-ExcludeFile $ExcludeFile has a quote inside a value. One pattern per line, quotes only around it:`n" + ($badQ -join "`n"))
+    exit 1
+  }
   $patterns += @($fromFile | ForEach-Object { ConvertTo-AsciiLower $_ })
   Write-Host "Excluding $($patterns.Count) patterns from $ExcludeFile"
 }
 $anyFilter = ($MinScore -or $patterns.Count)
+
+# What the local filter was, in the reader's words, for the report. -MinScore
+# and -Exclude run here after the reply arrives, so the Axur query printed
+# above each table never shows them; the report puts this text beside the
+# count of what was filtered out. $patterns is already ASCII-lowercased, as
+# the match is, so both scripts print the same list. Empty when no filter runs.
+# axur-report.sh builds FILTERDESC by the same rule; change one and change the
+# other.
+$filterText = ''
+if ($MinScore) { $filterText = "records scoring below $MinScore" }
+if ($patterns.Count) {
+  $filterText = $(if ($filterText) { "$filterText, and " } else { '' }) +
+    'records naming a site that contains ' + (($patterns | ForEach-Object { '"' + $_ + '"' }) -join ', ')
+}
 $partial = @(); $incomplete = @()
 
 # Keep a row unless the score is below the floor or a pattern matches its
@@ -814,7 +847,10 @@ function Complete-Search($job) {
 
   $examined = $null
   if ($foldable -contains $name) { $examined = $found.Count }
-  if ($anyFilter -and $filtered -contains $name -and $found.Count) {
+  # An empty page is recounted like any other, to 0. Skipping it left Axur's
+  # count standing as the headline beside "0 examined", a count of records
+  # that were never in hand. filter.pl in axur-report.sh does the same.
+  if ($anyFilter -and $filtered -contains $name) {
     $kept = @($found | Where-Object { Test-Keep $_ })
     Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
     $found = $kept
@@ -828,8 +864,14 @@ function Complete-Search($job) {
   # page walk stopped short, or fewer rows were examined than Axur reported -
   # which also covers a walk that ended because a page came back twice.
   $pulled = $null; $folded = $null; $foldPartial = $false; $hashed = $null; $hashedFolded = $null
+  # dropped: examined minus pulled, ONLY for a search a local filter ran on.
+  # Zero when it dropped nothing; absent when no local filter applies to the
+  # search. The report treats those two differently, so never write a zero
+  # for a search the filter does not touch. fold.pl writes the same field.
+  $dropped = $null
   if ($foldable -contains $name) {
     $pulled = $found.Count
+    if ($anyFilter -and $filtered -contains $name) { $dropped = [int]($examined - $pulled) }
     if ($byAccount -contains $name) { $hashed, $hashedFolded = Get-HashedCounts $found }
     $found = @(Merge-Rows $name $found)
     $folded = $found.Count
@@ -844,7 +886,7 @@ function Complete-Search($job) {
   [pscustomobject]@{
     name = $name; query = $query; total = $total
     reported = $reported; examined = $examined; pulled = $pulled; folded = $folded; foldPartial = $foldPartial
-    hashed = $hashed; hashedFolded = $hashedFolded
+    dropped = $dropped; hashed = $hashed; hashedFolded = $hashedFolded
     raw = ($reply | ConvertTo-Json -Depth 12 -Compress)
   }
 }
@@ -1111,7 +1153,7 @@ $head = @'
    footer{padding-top:14px}
  }
 </style></head><body>
-<main data-brand="{{BRAND}}" data-domain="{{DOMAIN}}" data-scan="{{DATE_ISO}}">
+<main data-brand="{{BRAND}}" data-domain="{{DOMAIN}}" data-scan="{{DATE_ISO}}" data-filter="{{FILTER}}">
 
 <div class="cover" id="top"><div class="wrap">
   <div class="top">
@@ -1202,6 +1244,17 @@ $tail = @'
   if (totals.some(function(t){ return Number(t.foldPartial) === 1; })) {
     var foot = document.querySelector('.cover .foot');
     if (foot) foot.appendChild(document.createTextNode(' A repeated site or account is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
+  }
+  // What the local filter was, handed over by the cover. --min-score and
+  // --exclude run in the script after the reply arrives, so the Axur query
+  // printed above each table never shows them. Empty when no filter ran.
+  var FILTER = (main && main.getAttribute('data-filter')) || '';
+  // The filters apply to the three site searches only. A reader who set one
+  // would otherwise take the whole report as filtered, and a missing number
+  // under the credential tables does not explain itself.
+  if (FILTER) {
+    var foot2 = document.querySelector('.cover .foot');
+    if (foot2) foot2.appendChild(document.createTextNode(' A local filter was applied to the three site searches (phishing pages, lookalike domains, mail-enabled lookalikes); each of those sections says how many records it examined and filtered out, and what the filter was. The two credential searches are unfiltered.'));
   }
   // One search per block. Parsing them together meant a single bad reply threw
   // once and blanked all five tables, and the empty result was cached, so a
@@ -1638,7 +1691,33 @@ $tail = @'
           if (c0) c0.innerHTML = '<b>' + show(total) + '</b> records &middot; no table here';
           return;
         }
-        if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
+        // dropped is written only for a search a local filter ran on, zero
+        // included. Absent means no local filter applies to this search, which
+        // is a different thing from zero, so the test is presence, not value.
+        // The sentence is scoped to what was examined: the script cannot know
+        // about rows it never pulled. "kept" and "filtered out", never a bare
+        // "dropped", which reads as something Axur failed to return.
+        var dropped = (t.dropped === undefined || t.dropped === null) ? null : Number(t.dropped);
+        var filtSentence = dropped === null ? '' :
+          ' The report examined ' + show(Number(t.examined)) + ' records and filtered out ' + show(dropped) + ' of them' +
+          (FILTER ? ': ' + esc(FILTER) : '') + '. The ' + show(Number(t.pulled)) + ' kept are the count above.';
+        var filtHead = dropped === null ? ' records' :
+          ' kept of ' + show(Number(t.examined)) + ' examined &middot; ' + show(dropped) + ' filtered out';
+        // Nothing in hand: nothing was filtered, and Axur's own count must not
+        // stand as "kept" beside "0 examined". The recount made the headline 0;
+        // say what Axur reported and that no records came back to be examined.
+        var exN = Number(t.examined), repN = Number(t.reported);
+        if (dropped !== null && exN === 0) {
+          filtSentence = ' The report examined 0 records, so there was nothing to filter' +
+            (t.reported !== null && !isNaN(repN) && repN > 0 ? '; Axur reports ' + show(repN) + ' for this search, but no records came back to be examined.' : '.');
+          filtHead = ' kept &middot; 0 examined';
+        }
+        if (!rs.length) {
+          box.innerHTML = '<p class="more">' + (dropped === null || exN === 0 ? 'No records returned.' : 'No records left to show.') + filtSentence + '</p>';
+          var c1 = secs.querySelector('.cnt[data-cnt="' + i + '"]');
+          if (c1 && dropped !== null) c1.innerHTML = '<b>' + show(total) + '</b>' + filtHead;
+          return;
+        }
         // HIDE gates guessed columns only; COLS is curated by hand.
         var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
         // "Back to the top" has to be reachable from any page, and the PDF has
@@ -1706,11 +1785,11 @@ $tail = @'
           line = total === null ? 'Showing ' + rs.length + ' records; the total count was not available.'
                                 : (rs.length < total ? 'The first ' + rs.length + ' of ' + show(total) + ' records.' : 'All ' + show(total) + ' records.');
         }
-        html += '</tbody></table><p class="more">' + line +
+        html += '</tbody></table><p class="more">' + line + filtSentence +
           ' "Found by Axur" is the day the record reached Axur, which can be long after the event itself.</p>';
         box.innerHTML = html;
         var cnt = secs.querySelector('.cnt[data-cnt="' + i + '"]');
-        if (cnt) cnt.innerHTML = '<b>' + show(total) + '</b> records &middot; ' +
+        if (cnt) cnt.innerHTML = '<b>' + show(total) + '</b>' + filtHead + ' &middot; ' +
           (folded ? rs.length + ' rows shown, standing for ' + show(stand)
                   : (total !== null && rs.length < total ? 'first ' + rs.length + ' shown' : 'all shown'));
       } catch (e) {
@@ -1743,7 +1822,8 @@ $head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAI
               Replace('{{DATE_LONG}}',  $now.ToString('dd MMMM yyyy')).
               Replace('{{DATE_SHORT}}', $now.ToString('dd MMM yyyy')).
               Replace('{{CAVEAT}}', (ConvertTo-HtmlText $CAVEAT)).
-              Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE))
+              Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE)).
+              Replace('{{FILTER}}', (ConvertTo-HtmlText $filterText))
 $tail = $tail.Replace('ROWSVALUE', "$Rows")
 
 # The files about to be written hold the customer's leaked passwords in full.
@@ -1776,6 +1856,8 @@ function Get-HeadJson($r) {
     $h += ',"reported":' + $(if ($null -eq $r.reported) { 'null' } else { "$($r.reported)" }) +
           ',"examined":' + $r.examined + ',"pulled":' + $r.pulled + ',"folded":' + $r.folded
   }
+  # the filtered searches only, zero included; the same place in the order as fold.pl
+  if ($null -ne $r.dropped) { $h += ',"dropped":' + $r.dropped }
   # the two credential searches only; the same place in the order as fold.pl
   if ($null -ne $r.hashed) { $h += ',"hashed":' + $r.hashed + ',"hashedFolded":' + $r.hashedFolded }
   if ($r.foldPartial) { $h += ',"foldPartial":1' }

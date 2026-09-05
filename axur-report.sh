@@ -238,13 +238,27 @@ if [ -n "$EXCLUDEFILE" ]; then
   if [ ! -r "$EXCLUDEFILE" ]; then
     echo "Cannot read $EXCLUDEFILE" >&2; exit 1
   fi
-  FROMFILE=$(sed 's/\r$//; s/#.*//' "$EXCLUDEFILE" \
-             | cut -d, -f1 \
-             | tr -d '"'"'"'"' \
-             | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
-             | grep -v '^$' \
-             | grep -viE '^domains?$' \
-             | paste -sd, -)
+  # One value per line: the comment and the rest of a CSV row cut off, then
+  # spaces and quotes taken off both ENDS only, as a CSV export wraps a field.
+  # A quote left INSIDE the value is a line the script cannot read as a domain,
+  # and it stops the run and names the line rather than guess: every quote
+  # used to be deleted wherever it stood, so a quote mid-line gave this script
+  # one pattern and axur-report.ps1 another, and the two reports filtered
+  # different rows while printing different criteria. Get-ExcludeFile in
+  # axur-report.ps1 is the same rule; change one and change the other.
+  # [[:blank:]] and not [[:space:]]: space and tab, named exactly. The wider
+  # class also takes a formfeed and a vertical tab off the ends, and
+  # Get-ExcludeFile in axur-report.ps1 takes only space and tab, so a line with
+  # one of those beside a quote was trimmed here and not there: one script read
+  # a pattern and the other refused the file.
+  NORM=$(sed "s/\r\$//; s/#.*//; s/,.*//; s/^[[:blank:]\"']*//; s/[[:blank:]\"']*\$//" "$EXCLUDEFILE")
+  BADQ=$(printf '%s\n' "$NORM" | grep -n "[\"']" || true)
+  if [ -n "$BADQ" ]; then
+    echo "--exclude-file $EXCLUDEFILE has a quote inside a value. One pattern per line, quotes only around it:" >&2
+    printf '%s\n' "$BADQ" | sed 's/^/  line /; s/:/: /' >&2
+    exit 1
+  fi
+  FROMFILE=$(printf '%s\n' "$NORM" | grep -v '^$' | grep -viE '^domains?$' | paste -sd, -)
   [ -n "$FROMFILE" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$FROMFILE"
   echo "Excluding $(printf '%s' "$EXCLUDE" | tr ',' '\n' | grep -c .) patterns from $EXCLUDEFILE"
 fi
@@ -263,6 +277,21 @@ if [ -n "$MINSCORE" ]; then
     ''|*[!0-9.]*) echo "--min-score takes a number, not \"$MINSCORE\"." >&2; exit 1 ;;
   esac
 fi
+
+# What the local filter was, in the reader's words, for the report. --min-score
+# and --exclude run here after the reply arrives, so the Axur query printed
+# above each table never shows them; the report puts this text beside the
+# count of what was filtered out. The patterns are ASCII-lowercased, as the
+# match is, so both scripts print the same list. Empty when no filter runs.
+# axur-report.ps1 builds $filterText by the same rule; change one and change
+# the other.
+FILTERDESC=""
+[ -n "$MINSCORE" ] && FILTERDESC="records scoring below $MINSCORE"
+if [ -n "$EXCLUDE" ]; then
+  PATLIST=$(printf '%s' "$EXCLUDE" | tr ',' '\n' | grep -v '^$' | tr 'A-Z' 'a-z' | sed 's/.*/"&"/' | paste -sd, - | sed 's/,/, /g')
+  FILTERDESC="${FILTERDESC:+$FILTERDESC, and }records naming a site that contains $PATLIST"
+fi
+FILTER_H=$(html_escape "$FILTERDESC")
 
 if [ -n "$SAVECONFIG" ]; then
   SAVECONFIG=$(expand_user_path "$SAVECONFIG")
@@ -694,7 +723,9 @@ for my $extra (@more) {
     last if $c eq ']' && !$d;
   }
 }
-exit 1 unless @rows;
+# An empty array is a result with nothing in it, not a reply that cannot be
+# read: it goes on to examined 0, pulled 0, dropped 0, as the PowerShell
+# script does. Only a reply with no data array at all fails, above.
 
 # These subs are lifted from fold.pl, later in this file, word for word apart
 # from %READS; change one and change the other. The filter used to read a
@@ -1177,8 +1208,11 @@ my $hashedFolded = scalar grep { $_ ne '' && $plainacct{$_} } @hashedkeys;
 my $out = substr($s, 0, $begin) . join(',', @out) . substr($s, $end);
 # The record carries, after total: reported (Axur's own count), examined (the
 # raw rows in hand), pulled (the rows after the filter), folded (the rows they
-# became). The filter writes the first two when it runs; otherwise they are
-# the total and the row count as they stand. foldPartial says the fold saw
+# became), and dropped (examined minus pulled) ONLY when the filter ran on this
+# search - zero when it dropped nothing, absent when no local filter applies
+# to the search, and the report treats those two differently. The filter
+# writes reported and examined when it runs; otherwise they are the total and
+# the row count as they stand. foldPartial says the fold saw
 # only part of the result, and the report puts a note above that table. It is
 # set when the count is unknown, when the search was still running so the
 # count is a floor, when the page walk stopped short, or when fewer rows were
@@ -1187,13 +1221,14 @@ my $out = substr($s, 0, $begin) . join(',', @out) . substr($s, $end);
 my ($h) = $out =~ /^(\{"name":"[^"]*","query":".*?","total":[^,]*)/s;
 exit 1 unless defined $h;
 my ($total) = $h =~ /"total":([^,]*)\z/;
-my ($reported, $examined, $extra) = ($total, $pulled, '');
+my ($reported, $examined, $extra, $filtered) = ($total, $pulled, '', 0);
 if (substr($out, length $h) =~ /^,"reported":([^,]*),"examined":([0-9]+)/) {
-  ($reported, $examined) = ($1, $2); $h .= qq{,"reported":$reported,"examined":$examined};
+  ($reported, $examined, $filtered) = ($1, $2, 1); $h .= qq{,"reported":$reported,"examined":$examined};
 } else {
   $extra = qq{,"reported":$reported,"examined":$examined};
 }
 $extra .= qq{,"pulled":$pulled,"folded":$folded};
+$extra .= ',"dropped":' . ($examined - $pulled) if $filtered;
 $extra .= qq{,"hashed":$hashed,"hashedFolded":$hashedFolded} if $cred;
 $extra .= ',"foldPartial":1'
   if $reported !~ /^[0-9]+$/ || $incomplete || $partial || $examined < $reported;
@@ -1549,7 +1584,7 @@ cat <<HTMLHEAD
    footer{padding-top:14px}
  }
 </style></head><body>
-<main data-brand="$BRAND_H" data-domain="$DOMAIN_H" data-scan="$(date '+%Y-%m-%d')">
+<main data-brand="$BRAND_H" data-domain="$DOMAIN_H" data-scan="$(date '+%Y-%m-%d')" data-filter="$FILTER_H">
 
 <div class="cover" id="top"><div class="wrap">
   <div class="top">
@@ -1654,6 +1689,17 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   if (totals.some(function(t){ return Number(t.foldPartial) === 1; })) {
     var foot = document.querySelector('.cover .foot');
     if (foot) foot.appendChild(document.createTextNode(' A repeated site or account is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
+  }
+  // What the local filter was, handed over by the cover. --min-score and
+  // --exclude run in the script after the reply arrives, so the Axur query
+  // printed above each table never shows them. Empty when no filter ran.
+  var FILTER = (main && main.getAttribute('data-filter')) || '';
+  // The filters apply to the three site searches only. A reader who set one
+  // would otherwise take the whole report as filtered, and a missing number
+  // under the credential tables does not explain itself.
+  if (FILTER) {
+    var foot2 = document.querySelector('.cover .foot');
+    if (foot2) foot2.appendChild(document.createTextNode(' A local filter was applied to the three site searches (phishing pages, lookalike domains, mail-enabled lookalikes); each of those sections says how many records it examined and filtered out, and what the filter was. The two credential searches are unfiltered.'));
   }
   // One search per block. Parsing them together meant a single bad reply threw
   // once and blanked all five tables, and the empty result was cached, so a
@@ -2090,7 +2136,33 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
           if (c0) c0.innerHTML = '<b>' + show(total) + '</b> records &middot; no table here';
           return;
         }
-        if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
+        // dropped is written only for a search a local filter ran on, zero
+        // included. Absent means no local filter applies to this search, which
+        // is a different thing from zero, so the test is presence, not value.
+        // The sentence is scoped to what was examined: the script cannot know
+        // about rows it never pulled. "kept" and "filtered out", never a bare
+        // "dropped", which reads as something Axur failed to return.
+        var dropped = (t.dropped === undefined || t.dropped === null) ? null : Number(t.dropped);
+        var filtSentence = dropped === null ? '' :
+          ' The report examined ' + show(Number(t.examined)) + ' records and filtered out ' + show(dropped) + ' of them' +
+          (FILTER ? ': ' + esc(FILTER) : '') + '. The ' + show(Number(t.pulled)) + ' kept are the count above.';
+        var filtHead = dropped === null ? ' records' :
+          ' kept of ' + show(Number(t.examined)) + ' examined &middot; ' + show(dropped) + ' filtered out';
+        // Nothing in hand: nothing was filtered, and Axur's own count must not
+        // stand as "kept" beside "0 examined". The recount made the headline 0;
+        // say what Axur reported and that no records came back to be examined.
+        var exN = Number(t.examined), repN = Number(t.reported);
+        if (dropped !== null && exN === 0) {
+          filtSentence = ' The report examined 0 records, so there was nothing to filter' +
+            (t.reported !== null && !isNaN(repN) && repN > 0 ? '; Axur reports ' + show(repN) + ' for this search, but no records came back to be examined.' : '.');
+          filtHead = ' kept &middot; 0 examined';
+        }
+        if (!rs.length) {
+          box.innerHTML = '<p class="more">' + (dropped === null || exN === 0 ? 'No records returned.' : 'No records left to show.') + filtSentence + '</p>';
+          var c1 = secs.querySelector('.cnt[data-cnt="' + i + '"]');
+          if (c1 && dropped !== null) c1.innerHTML = '<b>' + show(total) + '</b>' + filtHead;
+          return;
+        }
         // HIDE gates guessed columns only; COLS is curated by hand.
         var cs = COLS[t.name] || guessCols(rs).filter(function(c){ return !HIDE.test(c.k); });
         // "Back to the top" has to be reachable from any page, and the PDF has
@@ -2158,11 +2230,11 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
           line = total === null ? 'Showing ' + rs.length + ' records; the total count was not available.'
                                 : (rs.length < total ? 'The first ' + rs.length + ' of ' + show(total) + ' records.' : 'All ' + show(total) + ' records.');
         }
-        html += '</tbody></table><p class="more">' + line +
+        html += '</tbody></table><p class="more">' + line + filtSentence +
           ' "Found by Axur" is the day the record reached Axur, which can be long after the event itself.</p>';
         box.innerHTML = html;
         var cnt = secs.querySelector('.cnt[data-cnt="' + i + '"]');
-        if (cnt) cnt.innerHTML = '<b>' + show(total) + '</b> records &middot; ' +
+        if (cnt) cnt.innerHTML = '<b>' + show(total) + '</b>' + filtHead + ' &middot; ' +
           (folded ? rs.length + ' rows shown, standing for ' + show(stand)
                   : (total !== null && rs.length < total ? 'first ' + rs.length + ' shown' : 'all shown'));
       } catch (e) {
