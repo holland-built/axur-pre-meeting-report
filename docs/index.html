@@ -46,7 +46,19 @@ code.url{background:var(--accent-soft);border-color:#bfe0cd;color:var(--accent-d
         radial-gradient(50% 80% at 78% 0%, #f6e7c2 0%, rgba(246,231,194,0) 58%),
         radial-gradient(70% 100% at 100% 40%, #d9e9f7 0%, rgba(217,233,247,0) 60%),
         linear-gradient(180deg,#f4fbf6 0%, var(--canvas) 100%)}
-.wrap{max-width:min(1320px,94vw);margin:0 auto;padding:0 var(--s-xl)}
+.wrap{max-width:min(900px,94vw);margin:0 auto;padding:0 var(--s-xl)}
+
+/* ---------- the two grids step outside the measure ---------- */
+/* An option grid and a table of queries are not prose. On a wide screen they
+   read better wide, and stretching the paragraphs to match would not. Each
+   keeps the page centred by pulling its own margins out symmetrically. */
+:root{--bleed:min(1280px,92vw)}
+@media (min-width:1400px){
+  .step > .opts,.step > .rows{
+    width:var(--bleed);
+    margin-inline:calc((100% - var(--bleed))/2);
+  }
+}
 .band .wrap{padding-top:var(--s-huge);padding-bottom:var(--s-xxl)}
 .mark{height:22px;width:auto;display:block}
 /* the logo's wordmark is near-white, so it needs a dark chip to sit on */
@@ -187,6 +199,8 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
   .band{background:none}
   .copy,.get{display:none}
   .step{break-inside:avoid}
+  /* paper has no wide screen to break out into */
+  .step > .opts,.step > .rows{width:auto;margin-inline:0}
   @page{margin:14mm}
 }
 </style>
