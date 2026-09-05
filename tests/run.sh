@@ -274,6 +274,7 @@ dom() { # dom FILE -> renders $WORK/out/FILE into $WORK/dom/FILE
 }
 # One answer about one section of the rendered page:
 #   brk    how many break rows the table has
+#   brksays  the text of the break row, tags removed
 #   risk   ok when every score above the break is >= 70 and every one below is < 70
 #   dates  ok when the rows below the break run newest first
 #   kind   ok when every row above the break is marked Readable
@@ -306,11 +307,13 @@ if q == "more":
     n = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S); print(n.group(1) if n else "no-more"); sys.exit()
 m2 = re.search(r"<tbody>(.*?)</tbody>", m.group(1), re.S)
 if not m2: print("no-table"); sys.exit()
-above, below, brk, seen = [], [], 0, False
+above, below, brk, seen, brks = [], [], 0, False, []
 for tr in re.split(r"<tr\b", m2.group(1))[1:]:
-    if tr.lstrip().startswith("class=\"brk\""): brk += 1; seen = True; continue
+    if tr.lstrip().startswith("class=\"brk\""):
+        brk += 1; seen = True; brks.append(re.sub(r"<[^>]*>", "", tr.split(">", 1)[1]).strip()); continue
     (below if seen else above).append(tr)
 if q == "brk": print(brk); sys.exit()
+if q == "brksays": print(" | ".join(brks) if brks else "no-break"); sys.exit()
 if q == "place":
     print("ok" if brk == 1 and above and below else "bad:brk=%d above=%d below=%d" % (brk, len(above), len(below)))
     sys.exit()
@@ -810,6 +813,23 @@ if wrote "sh  unfolded report" nf.html; then
   else skip "sh  no row carries the fold note" "no Chrome"; fi
 fi
 
+echo "-- a field named like an internal mark means nothing --"
+# The rows are the customer's leaked data, so a field name in them is a name
+# somebody else chose. The Windows script used to mark bad rows by adding a
+# property called __unfoldable, so a record carrying that name was dropped from
+# the fold and the counts on Windows and folded on a Mac.
+serve FAKE_DUPES=1 FAKE_ODDROW=marker
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out mk3.html
+if wrote "sh  marker report" mk3.html; then
+  check "sh  the rows fold as usual" "$(payq mk3.html 3 folds)" "4,-"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out mk4.html
+  if wrote "ps1 marker report" mk4.html; then
+    check "ps1 the rows fold as usual" "$(payq mk4.html 3 folds)" "4,-"
+  fi
+else skip "ps1 the rows fold as usual"; fi
+
 echo "-- the wording follows the search, not the rows on screen --"
 # The row that stands alone outscores the repeated ones, so it sorts to the top
 # and --rows 1 cuts the table before the folded group. Deciding from the rows on
@@ -832,8 +852,16 @@ echo "-- one account across many sites folds into one row --"
 # site named; eport once. The rendered table puts abelle first (readable),
 # then the rest newest first: eport, cboyd, dnoble.
 SITES6="netflix.com|linkedin.com|github.com|dropbox.com|slack.com|zoom.us"
-PLAINCNT="<b>2,906</b> records · listed in section 01"   # the dumped DOM writes the middot as a character
-PLAINMORE='These 2,906 accounts are the readable ones from section 01. They are listed there, at the top of the table, marked <span class="flag r">Readable</span> in the Kind column. They are not repeated here.'
+PLAINCNT="<b>2,906</b> records · no table here"   # the dumped DOM writes the middot as a character
+# Section 02 is its own Axur search. It cannot claim its 2,906 accounts are
+# listed in section 01, which examined 11 records of its own 3,412.
+PLAINMORE0='This is a separate search, for records on the domain whose password was stored in readable form: 2,906 of them. No table is printed here. The readable records that reached section 01'\''s table are at the top of it, marked <span class="flag r">Readable</span> in the Kind column, so they are not repeated here.'
+# abelle: 1 PLAIN and 5 hashed rows; cboyd, dnoble, eport: 5 hashed rows with
+# no readable row. So 10 hashed, 5 of them under a readable row, of 11 pulled
+# against 3,412 reported, so the fold was partial and the sentence says so.
+PLAINMORE="$PLAINMORE0 Section 01 examined 11 of the 3,412 records Axur reports for it. Of those, 10 were hashed, and 5 of the hashed belonged to an account that also had a readable record among the same examined records. Both counts cover only the records section 01 examined; more may exist. Section 01 and this section are separate Axur searches, run at different moments, so their numbers are not parts of one whole and none can be subtracted from another."
+BRK1='Above this line: accounts whose password is readable. Below it: the rest, newest first.'
+BRK3='Above this line: risk 70 or more, highest first, the point at which this report colours a score red. Below it: everything else, newest first.'
 serve FAKE_CREDDUPES=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out cd.html
 if wrote "sh  credentials folded" cd.html; then
@@ -846,11 +874,13 @@ if wrote "sh  credentials folded" cd.html; then
     check "sh  the sentence: six sites, one site, none"   "$(domq cd.html s1 sitenote)" "6 sites: netflix.com, linkedin.com, and 4 more,-,1 site: netflix.com,none"
     check "sh  the PLAIN row shows its password"          "$(domq cd.html s1 pw)" "readable2,hashlone,hashone0,hashnone0"
     check "sh  In plaintext: the count is unchanged"      "$(domq cd.html s2 cnt)"  "$PLAINCNT"
-    check "sh  In plaintext: the wording is unchanged"    "$(domq cd.html s2 more)" "$PLAINMORE"
+    check "sh  In plaintext: the wording carries section 01's counts" "$(domq cd.html s2 more)" "$PLAINMORE"
+    check "sh  the break row carries both counts, as records examined" "$(domq cd.html s1 brksays)" \
+      "$BRK1 10 hashed records were examined for this table. Of those, 5 belonged to an account that also had a readable record in the same examined data."
     # This table folds accounts, not sites, and the line under it has to name
     # the thing it actually folded.
     check "sh  the credentials table says it folded accounts" "$(domq cd.html s1 foldword)" "account"
-  else for c in "the sentence: six sites, one site, none" "the PLAIN row shows its password" "In plaintext: the count is unchanged" "In plaintext: the wording is unchanged" "the credentials table says it folded accounts"; do skip "sh  $c" "no Chrome"; done; fi
+  else for c in "the sentence: six sites, one site, none" "the PLAIN row shows its password" "In plaintext: the count is unchanged" "In plaintext: the wording carries section 01's counts" "the credentials table says it folded accounts"; do skip "sh  $c" "no Chrome"; done; fi
 fi
 if [ -n "$PWSH" ]; then
   runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out cd2.html
@@ -863,12 +893,12 @@ if [ -n "$PWSH" ]; then
       dom cd2.html
       check "ps1 the sentence: six sites, one site, none" "$(domq cd2.html s1 sitenote)" "6 sites: netflix.com, linkedin.com, and 4 more,-,1 site: netflix.com,none"
       check "ps1 In plaintext: the count is unchanged"    "$(domq cd2.html s2 cnt)"  "$PLAINCNT"
-      check "ps1 In plaintext: the wording is unchanged"  "$(domq cd2.html s2 more)" "$PLAINMORE"
-    else for c in "the sentence: six sites, one site, none" "In plaintext: the count is unchanged" "In plaintext: the wording is unchanged"; do skip "ps1 $c" "no Chrome"; done; fi
+      check "ps1 In plaintext: the wording carries section 01's counts" "$(domq cd2.html s2 more)" "$PLAINMORE"
+    else for c in "the sentence: six sites, one site, none" "In plaintext: the count is unchanged" "In plaintext: the wording carries section 01's counts"; do skip "ps1 $c" "no Chrome"; done; fi
   fi
 else
   for c in "the account row counts its repeats" "the account row lists its sites, first seen first" "the PLAIN row stands for the group" "In plaintext folds the same way" \
-           "the sentence: six sites, one site, none" "In plaintext: the count is unchanged" "In plaintext: the wording is unchanged"; do skip "ps1 $c"; done
+           "the sentence: six sites, one site, none" "In plaintext: the count is unchanged" "In plaintext: the wording carries section 01's counts"; do skip "ps1 $c"; done
 fi
 # NETFLIX.COM and https://netflix.com/path are one site: the rule strips the
 # scheme, cuts at the path and lowercases, on both sides.
@@ -937,6 +967,66 @@ if [ -n "$PWSH" ]; then
     else skip "ps1 the page still reports itself ready" "no Chrome"; fi
   fi
 else for c in "all five blocks still parse" "one </script> per <script" "the site folded, cut at its first slash" "the page still reports itself ready"; do skip "ps1 $c"; done; fi
+
+echo "-- clear and masked for the same account: the counts --"
+# fmixed has 2 PLAIN rows and 3 hashed rows. The two counts are rows, so both
+# read 3: counting accounts would give 1 and counting every pairing 6. Two
+# more rows are pulled, one with no passwordType and one whose passwordType is
+# not JSON, and they sit in neither bucket: 7 pulled, 2 readable, 3 hashed, 2
+# neither. The second search gets the readable rows alone, so its own hashed
+# count is 0 and a 3 in its sentence can only have come from section 01. The
+# other three searches carry no hashed field at all.
+serve FAKE_CREDMIX=mixed
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out hm.html
+if wrote "sh  mixed account" hm.html; then
+  check "sh  2 PLAIN + 3 hashed rows: hashed 3, hashedFolded 3"  "$(tot hm.html hashed)/$(tot hm.html hashedFolded)" "3,0,-,-,-/3,0,-,-,-"
+  check "sh  a missing or malformed passwordType is in neither bucket" "$(tot hm.html pulled | cut -d, -f1)/$(tot hm.html hashed | cut -d, -f1)" "7/3"
+  check "sh  the fold was partial on this run"                   "$(tot hm.html foldPartial | cut -d, -f1)" "1"
+  if [ -n "$CHROME" ]; then
+    dom hm.html
+    check "sh  the break row carries both counts"      "$(domq hm.html s1 brksays)" \
+      "$BRK1 3 hashed records were examined for this table. Of those, 3 belonged to an account that also had a readable record in the same examined data."
+    check "sh  section 02 carries section 01's counts and its scope" "$(domq hm.html s2 more)" \
+      "$PLAINMORE0 Section 01 examined 7 of the 3,412 records Axur reports for it. Of those, 3 were hashed, and 3 of the hashed belonged to an account that also had a readable record among the same examined records. Both counts cover only the records section 01 examined; more may exist. Section 01 and this section are separate Axur searches, run at different moments, so their numbers are not parts of one whole and none can be subtracted from another."
+    check "sh  a search with no hashed number has no second sentence" "$(domq hm.html s3 brksays)" "$BRK3"
+  else for c in "the break row carries both counts" "section 02 carries section 01's counts and its scope" "a search with no hashed number has no second sentence"; do skip "sh  $c" "no Chrome"; done; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out hm2.html
+  if wrote "ps1 mixed account" hm2.html; then
+    check "ps1 2 PLAIN + 3 hashed rows: hashed 3, hashedFolded 3" "$(tot hm2.html hashed)/$(tot hm2.html hashedFolded)" "3,0,-,-,-/3,0,-,-,-"
+    check "ps1 a missing or malformed passwordType is in neither bucket" "$(tot hm2.html pulled | cut -d, -f1)/$(tot hm2.html hashed | cut -d, -f1)" "7/3"
+    if [ -n "$CHROME" ]; then
+      dom hm2.html
+      check "ps1 the break row carries both counts"    "$(domq hm2.html s1 brksays)" \
+        "$BRK1 3 hashed records were examined for this table. Of those, 3 belonged to an account that also had a readable record in the same examined data."
+    else skip "ps1 the break row carries both counts" "no Chrome"; fi
+  fi
+else for c in "2 PLAIN + 3 hashed rows: hashed 3, hashedFolded 3" "a missing or malformed passwordType is in neither bucket" "the break row carries both counts"; do skip "ps1 $c"; done; fi
+# An account with hashed rows only adds to hashed and not to hashedFolded; an
+# account with readable rows only adds to neither.
+serve FAKE_CREDMIX=all
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out ha.html
+if wrote "sh  every kind of account" ha.html; then
+  check "sh  hashed-only adds to hashed alone, readable-only to neither" "$(tot ha.html hashed | cut -d, -f1)/$(tot ha.html hashedFolded | cut -d, -f1)" "5/3"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out ha2.html
+  if wrote "ps1 every kind of account" ha2.html; then
+    check "ps1 hashed-only adds to hashed alone, readable-only to neither" "$(tot ha2.html hashed | cut -d, -f1)/$(tot ha2.html hashedFolded | cut -d, -f1)" "5/3"
+  fi
+else skip "ps1 hashed-only adds to hashed alone, readable-only to neither"; fi
+# Section 01's reply is not JSON, so it was never folded and carries no hashed
+# number. Section 02 then says nothing about hashed records.
+serve FAKE_BADJSON=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out hb.html
+if wrote "sh  section 01 unreadable" hb.html; then
+  check "sh  no hashed number without a fold"             "$(tot hb.html hashed | cut -d, -f1)" "-"
+  if [ -n "$CHROME" ]; then
+    dom hb.html
+    check "sh  section 02 says nothing about hashed records" "$(domq hb.html s2 more)" "$PLAINMORE0"
+  else skip "sh  section 02 says nothing about hashed records" "no Chrome"; fi
+fi
 
 echo "-- the cover names both kinds of fold --"
 # The cover said "A site seen more than once", and the credential searches fold

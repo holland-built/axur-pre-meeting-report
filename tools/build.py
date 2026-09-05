@@ -509,16 +509,20 @@ function Get-BadRows($text) {
   }
   return $bad
 }
-# Mark the rows Get-BadRows found, so Merge-Rows leaves them unfolded. The
-# mark is taken off again before the rows reach the report.
+# The rows Get-BadRows found, held beside the rows rather than on them. A
+# property named __unfoldable would have been a marker an attacker could write:
+# the rows are the customer's own leaked data, so a record carrying a field of
+# that name would have been dropped from the counts on Windows and counted on a
+# Mac. This set is keyed by the row itself, by reference, so nothing in the data
+# can reach it.
+$unfoldable = New-Object 'System.Collections.Generic.HashSet[object]' ([System.Collections.Generic.ReferenceEqualityComparer]::Instance)
 function Set-Unfoldable($rows, $text) {
   $bad = Get-BadRows $text
   for ($j = 0; $j -lt $rows.Count -and $j -lt $bad.Count; $j++) {
-    if ($bad[$j] -and $rows[$j] -is [psobject]) {
-      $rows[$j] | Add-Member -NotePropertyName __unfoldable -NotePropertyValue $true -Force
-    }
+    if ($bad[$j] -and $null -ne $rows[$j]) { [void]$script:unfoldable.Add($rows[$j]) }
   }
 }
+function Test-Unfoldable($row) { return ($null -ne $row -and $script:unfoldable.Contains($row)) }
 # The row that stands for the group: highest score, then newest date, then
 # the one seen first. A missing score sits below every score, and a missing
 # date before every date. A credential row has no score; a readable password
@@ -532,6 +536,30 @@ function Test-Better($sc, $d, $bestSc, $bestD) {
   if ($null -ne $d -and $d -ne $bestD) { return ($d -gt $bestD) }
   return $false
 }
+# Two counts for a credential search, over the rows the fold saw. hashed: rows
+# whose passwordType is a string and does not read PLAIN. hashedFolded: of
+# those rows, the ones whose account also has a PLAIN row, so Merge-Rows put
+# them under the readable row. Both count ROWS, never accounts and never
+# pairs: an account with 2 PLAIN rows and 3 hashed rows gives hashed 3 and
+# hashedFolded 3 - not 1 (counting accounts) and not 6 (counting every
+# pairing). A row whose passwordType is missing, null, not a string, malformed
+# or written twice (Set-Unfoldable marks those) is in neither bucket: it is not
+# hashed and it is not readable. fold.pl in axur-report.sh is the same rule.
+function Get-HashedCounts($found) {
+  $plainAcct = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+  $hashedKeys = New-Object System.Collections.ArrayList
+  foreach ($row in $found) {
+    if (Test-Unfoldable $row) { continue }
+    $v = Get-Prop $row 'passwordType'
+    if ($v -isnot [string]) { continue }
+    $k = Get-UserKey $row
+    if ((Get-Plain $row) -eq 1) { if ($k -cne '') { [void]$plainAcct.Add($k) } }
+    else { [void]$hashedKeys.Add($k) }
+  }
+  $folded = 0
+  foreach ($k in $hashedKeys) { if ($k -cne '' -and $plainAcct.Contains($k)) { $folded++ } }
+  return @([int]$hashedKeys.Count, [int]$folded)
+}
 function Merge-Rows($name, $found) {
   if ($foldable -notcontains $name) { return @($found) }
   $cred = ($byAccount -contains $name)
@@ -542,8 +570,7 @@ function Merge-Rows($name, $found) {
   # rule lowercases ASCII only, so a key in another script must stay itself.
   $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
   foreach ($row in $found) {
-    $k = if (Get-Prop $row '__unfoldable') { '' } elseif ($cred) { Get-UserKey $row } else { Get-FoldKey $row }
-    if ($row -is [psobject]) { $row.PSObject.Properties.Remove('__unfoldable') }
+    $k = if (Test-Unfoldable $row) { '' } elseif ($cred) { Get-UserKey $row } else { Get-FoldKey $row }
     if ($k -eq '') { [void]$slots.Add(@{ row = $row }); continue }
     if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList; [void]$slots.Add(@{ key = $k }) }
     [void]$groups[$k].Add($row)
@@ -701,6 +728,7 @@ function Complete-Search($job) {
   # Select-Object -First holding an array, and the run died on the first search
   # with "Cannot convert 'System.Object[]' to the type 'System.Int32'".
   $found = @(); if ($doc) { $found = @($doc.result.data) }
+  $script:unfoldable.Clear()
   if ($foldable -contains $name) { Set-Unfoldable $found $raw }
 
   # A filtered number is only honest if it was counted over every row, so when a
@@ -755,9 +783,10 @@ function Complete-Search($job) {
   # is unknown, the search was still running so the count is a floor, the
   # page walk stopped short, or fewer rows were examined than Axur reported -
   # which also covers a walk that ended because a page came back twice.
-  $pulled = $null; $folded = $null; $foldPartial = $false
+  $pulled = $null; $folded = $null; $foldPartial = $false; $hashed = $null; $hashedFolded = $null
   if ($foldable -contains $name) {
     $pulled = $found.Count
+    if ($byAccount -contains $name) { $hashed, $hashedFolded = Get-HashedCounts $found }
     $found = @(Merge-Rows $name $found)
     $folded = $found.Count
     # the same test as fold.pl: a count that is not a number is unknown
@@ -771,6 +800,7 @@ function Complete-Search($job) {
   [pscustomobject]@{
     name = $name; query = $query; total = $total
     reported = $reported; examined = $examined; pulled = $pulled; folded = $folded; foldPartial = $foldPartial
+    hashed = $hashed; hashedFolded = $hashedFolded
     raw = ($reply | ConvertTo-Json -Depth 12 -Compress)
   }
 }
@@ -837,6 +867,8 @@ function Get-HeadJson($r) {
     $h += ',"reported":' + $(if ($null -eq $r.reported) { 'null' } else { "$($r.reported)" }) +
           ',"examined":' + $r.examined + ',"pulled":' + $r.pulled + ',"folded":' + $r.folded
   }
+  # the two credential searches only; the same place in the order as fold.pl
+  if ($null -ne $r.hashed) { $h += ',"hashed":' + $r.hashed + ',"hashedFolded":' + $r.hashedFolded }
   if ($r.foldPartial) { $h += ',"foldPartial":1' }
   return $h
 }

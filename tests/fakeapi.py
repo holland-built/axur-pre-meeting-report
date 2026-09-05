@@ -9,7 +9,9 @@ Behaviour is steered by environment variables so one server covers every test:
   FAKE_ODDROW=KIND  with FAKE_DUPES, one odd thing about the repeated rows:
                     Host (capitalised key), surrogate (a lone \\ud83d escape),
                     control (a raw 0x01 byte in the host), nan (riskScore "NaN"),
-                    duphost (two "host" keys), duprisk (two "riskScore" keys, 91 then 5)
+                    duphost (two "host" keys), duprisk (two "riskScore" keys, 91 then 5),
+                    marker (a field named __unfoldable, which is a name the
+                    Windows script once used for its own internal mark)
   FAKE_ODDTOTAL=1   totalResults is the word "unknown", not a number
   FAKE_NOTOTAL=1    the status carries no totalResults, so the count is unknown
   FAKE_RUNNING=1    the search never finishes, so its count is only a floor
@@ -26,6 +28,12 @@ Behaviour is steered by environment variables so one server covers every test:
                     row that survives the fold, are </script><img src=x onerror=alert(1)>),
                     sitecase (NETFLIX.COM, then https://netflix.com/path with no
                     accessHost, so five sites not six), many (ten sites)
+  FAKE_CREDMIX=KIND page 1 of the first credential search holds an account with
+                    2 PLAIN rows and 3 hashed rows, a row of that account with
+                    no passwordType, and a row whose passwordType is a lone
+                    \\ud83d escape; "all" adds an account with hashed rows only
+                    and one with readable rows only. The second credential
+                    search gets the PLAIN rows alone, as Axur would answer it
 """
 import json, os, sys, time, uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -51,6 +59,7 @@ EXACT    = os.environ.get("FAKE_EXACT") == "1"    # totalResults equals the rows
 ODDTOTAL = os.environ.get("FAKE_ODDTOTAL") == "1" # totalResults is not a number
 CREDDUPES = os.environ.get("FAKE_CREDDUPES") == "1"  # page 1 repeats one account across sites
 CREDODD  = os.environ.get("FAKE_CREDODD", "")      # xss | sitecase | many, see above
+CREDMIX  = os.environ.get("FAKE_CREDMIX", "")      # mixed | all, see above
 LOG      = open(os.environ.get("FAKE_LOG", "/dev/null"), "a")
 
 SEARCHES = {}   # id -> {"n": ordinal, "query": ..., "source": ...}
@@ -116,6 +125,11 @@ def dupes(rows):
         out[0]["riskScore"] = "NaN"; out[2]["riskScore"] = 91
     elif ODDROW == "duphost":
         for r in out: r["hostDUP"] = "larkspur-login.example"   # DUP is cut off in do_GET
+    elif ODDROW == "marker":
+        # A field named like the Windows script's own internal mark. The rows
+        # are the customer's leaked data, so the name is one somebody else can
+        # choose; it must mean nothing to either script.
+        for r in out: r["__unfoldable"] = True
     elif ODDROW == "duprisk":
         out[0]["riskScoreDUP"] = 5; out[2]["riskScore"] = 91
     lone = dict(rows[1]); lone["riskScore"] = 95 if LONEFIRST else 34
@@ -172,6 +186,30 @@ def cred_dupes():
                 "sourceName": "IntelX", "sourceDate": 1788429683595, "detectionDate": 1788429683595})
     return out
 
+def cred_mix(ordinal):
+    """fmixed: 2 PLAIN rows and 3 hashed rows, so the fold's counts are 3 and
+    3 - counting accounts would say 1, counting pairings 6. Then a row of
+    fmixed with no passwordType and a row whose passwordType is not JSON,
+    which belong in neither bucket. With "all": ghash, hashed only, and
+    hplain, readable only. The second search sees the PLAIN rows alone."""
+    def r(i, user, kind, site):
+        out = {"id": "row-mix-%d" % i, "user": user, "password": "readable%d" % i if kind == "PLAIN" else "hash%d" % i,
+               "accessHost": site, "accessUrl": "https://%s/login" % site, "sourceName": "IntelX",
+               "sourceDate": 1788429683595 - (i + 10) * 86400000, "detectionDate": 1788429683595 - (i + 1) * 86400000}
+        if kind is not None: out["passwordType"] = kind
+        return out
+    sites = ["netflix.com", "linkedin.com", "github.com", "dropbox.com", "slack.com", "zoom.us", "adobe.com"]
+    kinds = ["PLAIN", "HASH", "PLAIN", "HASH", "HASH"]
+    out = [r(i, "fmixed@larkspur.com", kinds[i], sites[i]) for i in range(5)]
+    out.append(r(5, "fmixed@larkspur.com", None, sites[5]))
+    out.append(r(6, "iodd@larkspur.com", "\ud83d", sites[6]))
+    if CREDMIX == "all":
+        out += [r(7 + j, "ghash@larkspur.com", "HASH", sites[j]) for j in range(2)]
+        out += [r(9 + j, "hplain@larkspur.com", "PLAIN", sites[j]) for j in range(2)]
+    if ordinal == 2:
+        out = [x for x in out if x.get("passwordType") == "PLAIN"]
+    return out
+
 def body(sid, page):
     meta = SEARCHES[sid]
     rows = [row(i, page) for i in range(1, 4)]
@@ -179,6 +217,8 @@ def body(sid, page):
         rows = dupes(rows)
     if CREDDUPES and page == 1 and meta.get("source") == "credential":
         rows = cred_dupes()
+    if CREDMIX and page == 1 and meta.get("source") == "credential":
+        rows = cred_mix((meta["n"] - 1) % 5 + 1)
     rows = strip_scores(rows)
     n = TOTALS[(meta["n"] - 1) % 5]
     if EXACT and meta.get("source") == "signal-lake":

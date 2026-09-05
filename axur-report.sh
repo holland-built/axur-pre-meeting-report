@@ -968,10 +968,23 @@ sub better {
 # Every group keeps the place of its first row, so the order the API chose
 # survives for the rows that are not folded.
 my $pulled = scalar @rows;
+# Two counts for the credential searches, over the rows the fold saw. hashed:
+# rows whose passwordType decoded as a string and does not read PLAIN.
+# hashedFolded: of those rows, the ones whose account also has a PLAIN row,
+# so the fold put them under the readable row. Both count ROWS, never
+# accounts and never pairs: an account with 2 PLAIN rows and 3 hashed rows
+# gives hashed 3 and hashedFolded 3 - not 1 (counting accounts) and not 6
+# (counting every pairing). A row whose passwordType is missing, null, not a
+# string, malformed or written twice is in neither bucket: it is not hashed
+# and it is not readable. Get-HashedCounts in axur-report.ps1 is the same rule.
+my (@hashedkeys, %plainacct);
 my (@slots, %group);
 for my $r (@rows) {
   my $f = fields($r);
   my $k = $f ? ($cred ? userof($f) : keyof($f)) : '';
+  if ($cred && $f && $f->{'passwordType'} && $f->{'passwordType'}[0] eq 's') {
+    if (isplain($f)) { $plainacct{$k} = 1 if $k ne '' } else { push @hashedkeys, $k }
+  }
   if ($k eq '') { push @slots, [$r]; next }
   if (!$group{$k}) { $group{$k} = []; push @slots, $k }
   push @{$group{$k}}, [$r, $f];
@@ -1000,6 +1013,8 @@ for my $sl (@slots) {
   push @out, $row;
 }
 my $folded = scalar @out;
+my $hashed = scalar @hashedkeys;
+my $hashedFolded = scalar grep { $_ ne '' && $plainacct{$_} } @hashedkeys;
 
 my $out = substr($s, 0, $begin) . join(',', @out) . substr($s, $end);
 # The record carries, after total: reported (Axur's own count), examined (the
@@ -1021,6 +1036,7 @@ if (substr($out, length $h) =~ /^,"reported":([^,]*),"examined":([0-9]+)/) {
   $extra = qq{,"reported":$reported,"examined":$examined};
 }
 $extra .= qq{,"pulled":$pulled,"folded":$folded};
+$extra .= qq{,"hashed":$hashed,"hashedFolded":$hashedFolded} if $cred;
 $extra .= ',"foldPartial":1'
   if $reported !~ /^[0-9]+$/ || $incomplete || $partial || $examined < $reported;
 print $h, $extra, substr($out, length $h);
@@ -1715,7 +1731,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   function heading(name){ return TITLES[name] || name; }
   var MEANS = {
     'Leaked credentials':'One row per exposed account, however many times it leaked. The row says how many times and across how many sites. "Password used on" is the site the password was for, which is often not your own, and is the site of the record the row stands for.',
-    'In plaintext':'The accounts from section 01 whose password was stored in readable form. These are the ones to reset first. They are not listed again here: section 01 puts them at the top of its table.',
+    'In plaintext':'A separate search of the same domain for records whose password was stored in readable form. These are the ones to reset first. No table is printed here: the readable records that reached section 01\'s table are at the top of it.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
     'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, and many are never used. Your own defensive registrations appear here too.',
     'Mail-enabled lookalikes':'The lookalike domains with mail records already published. The record says the domain is configured to receive mail. It does not say anyone reads it: a registrar default, a defensive registration and a working mailbox all look the same here.'
@@ -1794,14 +1810,30 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   // {lead, rest, why, scored}: the rows above the break, the rows below it,
   // the sentence the break carries, and whether this table was ordered by
   // score at all. An empty why means no break is drawn.
-  function split(name, list){
-    var lead = [], rest = [], why = '', scored = false;
+  // The fold's two counts for a credential search, or null when the search
+  // does not carry them. hashed is the rows whose password was not readable;
+  // hashedFolded the rows among those whose account also had a readable row,
+  // so they were folded under it. Both count records the fold examined, never
+  // rows printed: --rows can cut the table before the readable row is shown.
+  function hashedOf(t){
+    var h = Number(t && t.hashed), f = Number(t && t.hashedFolded);
+    if (t === null || t === undefined || t.hashed === null || t.hashed === undefined || isNaN(h)) return null;
+    return { hashed: h, folded: isNaN(f) ? 0 : f };
+  }
+  function split(t, list){
+    var name = t.name, lead = [], rest = [], why = '', scored = false;
     if (name === 'Leaked credentials') {
       // no score here; a readable password is the one to reset first
       var plain = function(r){ return r && String(r.passwordType || '').toUpperCase() === 'PLAIN'; };
       lead = newestFirst(list.filter(plain));
       rest = newestFirst(list.filter(function(r){ return !plain(r); }));
       why = 'Above this line: accounts whose password is readable. Below it: the rest, newest first.';
+      // The second sentence speaks of the records examined, not the rows on
+      // the page: a folded hashed record sits under its account's readable
+      // row, and --rows may have cut that row from the table.
+      var hc = hashedOf(t);
+      if (hc) why += ' ' + show(hc.hashed) + ' hashed records were examined for this table. Of those, ' +
+        show(hc.folded) + ' belonged to an account that also had a readable record in the same examined data.';
     } else if (list.some(function(r){ return riskOf(r) !== null; })) {
       scored = true;
       lead = list.filter(function(r){ return riskOf(r) !== null && riskOf(r) >= HIGH; })
@@ -1853,12 +1885,13 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       var i = Number(box.getAttribute('data-i')), t = totals[i];
       try {
         var d = payloadFor(i);
-        // "In plaintext" is "Leaked credentials" with a filter on it, so its rows
-        // are already in the table above. Printing them twice made the reader
-        // check whether the two lists differed. The count still leads the cover;
-        // section 01 carries the evidence, with the readable ones at the top of
-        // it and the Kind column saying which is which.
-        var sp = split(t.name, rows(d));
+        // "In plaintext" asks Axur the same question as section 01 with a
+        // filter on it, so printing its rows here made the reader check whether
+        // the two lists differed. The count still leads the cover; section 01
+        // carries the evidence. Say no more than that: the two are separate
+        // searches over different pages, and the trim can cut a readable record
+        // section 01 examined before it ever reaches that table.
+        var sp = split(t, rows(d));
         var rs = sp.lead.concat(sp.rest).slice(0, ROWLIMIT), total = n(t.name);
         // What survives the cut. When lead alone is longer than --rows, no
         // break is drawn and no date-ordered row is shown; the "first N of M
@@ -1866,11 +1899,37 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
         // was cut. That is deliberate, not an oversight.
         var nlead = Math.min(sp.lead.length, rs.length), nrest = rs.length - nlead;
         if (t.name === 'In plaintext') {
-          box.innerHTML = '<p class="more">These ' + show(total) + ' accounts are the readable ' +
-            'ones from section 01. They are listed there, at the top of the table, marked ' +
-            '<span class="flag r">Readable</span> in the Kind column. They are not repeated here.</p>';
+          // The hashed counts come from section 01, never from this search:
+          // this one asks Axur for readable records only, so its own hashed
+          // count is zero, and the readable-and-hashed relationship exists only
+          // in section 01's mixed population. The two are separate Axur
+          // searches run at different moments over different pages, so this
+          // total and section 01's two counts are not parts of one whole, and
+          // the sentence says so rather than leave the reader to subtract.
+          // There is no table here, so no note above one to carry the scope:
+          // the sentence names how many records section 01 examined itself.
+          var t1 = null, hc1 = null;
+          totals.forEach(function(x){ if (x && x.name === 'Leaked credentials') t1 = x; });
+          hc1 = hashedOf(t1);
+          var s1 = '';
+          if (hc1) {
+            var pu1 = Number(t1.pulled), rep1 = Number(t1.reported);
+            s1 = ' Section 01 examined ' +
+              (Number(t1.foldPartial) === 1
+                 ? show(isNaN(pu1) ? null : pu1) + (isNaN(rep1) || t1.reported === null ? ' records, and Axur gave no total for that search'
+                                                                                          : ' of the ' + show(rep1) + ' records Axur reports for it')
+                 : 'all ' + show(isNaN(pu1) ? null : pu1) + ' of its records') +
+              '. Of those, ' + show(hc1.hashed) + ' were hashed, and ' + show(hc1.folded) +
+              ' of the hashed belonged to an account that also had a readable record among the same examined records.' +
+              (Number(t1.foldPartial) === 1 ? ' Both counts cover only the records section 01 examined; more may exist.' : '') +
+              ' Section 01 and this section are separate Axur searches, run at different moments, so their numbers are not parts of one whole and none can be subtracted from another.';
+          }
+          box.innerHTML = '<p class="more">This is a separate search, for records on the domain whose ' +
+            'password was stored in readable form: ' + show(total) + ' of them. No table is printed here. ' +
+            'The readable records that reached section 01\'s table are at the top of it, marked ' +
+            '<span class="flag r">Readable</span> in the Kind column, so they are not repeated here.' + s1 + '</p>';
           var c0 = secs.querySelector('.cnt[data-cnt="' + i + '"]');
-          if (c0) c0.innerHTML = '<b>' + show(total) + '</b> records &middot; listed in section 01';
+          if (c0) c0.innerHTML = '<b>' + show(total) + '</b> records &middot; no table here';
           return;
         }
         if (!rs.length) { box.innerHTML = '<p class="more">No records returned.</p>'; return; }
