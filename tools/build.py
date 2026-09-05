@@ -808,6 +808,11 @@ def check_download_source():
 def main():
     sh_text = SH.read_text()
     print("axur-report.ps1: %d lines" % build_powershell(sh_text))
+    # The tag check fetches both scripts over the network. The test kit builds
+    # into a copy of the repo to prove the generator is in step, and promises
+    # it never touches the network, so it asks for the generator only.
+    if "--generate-only" in sys.argv[1:]:
+        return
     check_download_source()
 
 

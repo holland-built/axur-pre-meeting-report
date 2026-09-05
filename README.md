@@ -103,6 +103,7 @@ exclude-file = ~/known/larkspur-owned.csv
 | `docs/index.html` | The SE guide. Its download buttons fetch the scripts from a fixed tag |
 | `docs/hosting.md` | How to host the guide |
 | `docs/redesign/` | An earlier look for the report, kept for reference |
+| `tests/` | The test kit. `bash tests/run.sh` runs both scripts against a stand-in API |
 | `tools/build.py` | Rebuilds `axur-report.ps1`, then checks the tag the guide fetches from still serves these scripts. Run it after every edit to `axur-report.sh` |
 
 `axur-report.sh` holds the report's HTML. `tools/build.py` generates
