@@ -417,7 +417,10 @@ function Complete-Search($job) {
   # ran, no reply was ever read, and every search reported "timed out".
   $tries = [Math]::Max(1, [int]($Wait / 2))
   for ($i = 0; $i -lt $tries; $i++) {
-    Start-Sleep -Seconds 2
+    # Ask first, then wait. Sleeping before the first read charged two seconds
+    # to every search whether or not it had already finished, so five finished
+    # searches still cost ten seconds of doing nothing.
+    if ($i -gt 0) { Start-Sleep -Seconds 2 }
     try { $r = Invoke-WebRequest -UseBasicParsing -Uri "$api/search/${id}?page=1&alias=true" -Headers $headers } catch { continue }
     $raw = $r.Content
     $o = $raw | ConvertFrom-Json

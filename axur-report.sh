@@ -450,7 +450,10 @@ collect_search() { # collect_search N
   TOTAL=""; OUTJ=""; RUNNING=""; TRIES=$((WAIT / 2))
   [ "$TRIES" -lt 1 ] && TRIES=1
   for _ in $(seq 1 "$TRIES"); do
-    sleep 2
+    # Ask first, then wait. Sleeping before the first read charged two seconds
+    # to every search whether or not it had already finished, so five finished
+    # searches still cost ten seconds of doing nothing.
+    [ -n "$OUTJ" ] && sleep 2
     OUTJ=$(curl -s "$API/search/$ID?page=1&alias=true" -H "@$AUTH")
     TOTAL=$(printf '%s' "$OUTJ" | sed -n 's/.*"totalResults":\([0-9]*\).*/\1/p')
     # BSD sed has no \| alternation, so a true/false pattern never matched
