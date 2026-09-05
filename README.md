@@ -100,17 +100,21 @@ exclude-file = ~/known/larkspur-owned.csv
 |---|---|
 | `axur-report.sh` | The Mac script |
 | `axur-report.ps1` | The Windows script. Generated, do not edit by hand |
-| `docs/index.html` | The SE guide, with both scripts embedded in its download buttons |
+| `docs/index.html` | The SE guide. Its download buttons fetch the scripts from a fixed tag |
 | `docs/hosting.md` | How to host the guide |
 | `docs/redesign/` | An earlier look for the report, kept for reference |
-| `tools/build.py` | Rebuilds `axur-report.ps1` and the guide's download buttons. Run it after every edit to `axur-report.sh` |
+| `tools/build.py` | Rebuilds `axur-report.ps1`, then checks the tag the guide fetches from still serves these scripts. Run it after every edit to `axur-report.sh` |
 
 `axur-report.sh` holds the report's HTML. `tools/build.py` generates
-`axur-report.ps1` and the guide's download buttons from it. Rebuild both after
-every edit:
+`axur-report.ps1` from it. Rebuild after every edit:
 
 ```bash
 python3 tools/build.py
 ```
+
+The guide no longer carries a copy of either script. Its buttons fetch them
+from a git tag, so a change to `axur-report.sh` does not reach anyone until
+that change is tagged and `var SRC` in `docs/index.html` points at the new tag.
+The builder compares the two and says so when they differ.
 
 </details>

@@ -639,35 +639,41 @@ def build_powershell(sh_text):
     return ps.count("\n") + 1
 
 
-def quote(line):
-    return "      '" + (line.replace("\\", "\\\\").replace("'", "\\'")
-                            .replace("</", "<\\/")) + "',"
+def check_download_source():
+    """The guide fetches both scripts from a fixed tag. Say so if they differ.
 
+    The page used to hold a copy of each script, and this rebuilt them after
+    every edit. It fetches from a tag now, so the failure changed shape: the
+    guide can point at a tag whose scripts are not these ones, and nothing in
+    the page would say so. Compare them here instead.
+    """
+    page = PAGE.read_text()
+    m = re.search(r"var SRC = '([^']+)'", page)
+    if not m:
+        sys.exit("docs/index.html no longer says where it fetches the scripts from.")
+    src = m.group(1)
+    tag = src.rstrip("/").rsplit("/", 1)[-1]
+    print("guide fetches the scripts from tag %s" % tag)
 
-def embed(page, start_marker, lines):
-    if page.count(start_marker) != 1:
-        sys.exit("marker %r is not unique; docs/index.html has drifted" % start_marker)
-    i = page.index(start_marker)
-    j = i
-    while not page[j:].lstrip().startswith("].join("):
-        j = page.index("\n", j) + 1
-    body = "\n".join(quote(l) for l in lines)
-    return page[:i + len(start_marker)] + "\n" + body + "\n    " + page[j:].lstrip()
+    try:
+        import urllib.request
+        for path in (SH, PS1):
+            with urllib.request.urlopen(src + path.name, timeout=15) as r:
+                remote = r.read()
+            local = path.read_bytes()
+            state = "matches" if remote == local else "DIFFERS from"
+            print("  %-18s %s the file here (%d bytes)" % (path.name, state, len(remote)))
+            if remote != local:
+                print("     tag a new version and point var SRC at it,"
+                      " or the guide hands out the wrong script.")
+    except Exception as e:
+        print("  could not reach %s (%s). Check it before you publish." % (src, e))
 
 
 def main():
     sh_text = SH.read_text()
     print("axur-report.ps1: %d lines" % build_powershell(sh_text))
-
-    page = PAGE.read_text()
-    for path, marker in ((SH, "    var sh = ["), (PS1, "    var ps = [")):
-        text = path.read_text().replace("\r\n", "\n")
-        lines = text.split("\n")
-        if lines and lines[-1] == "":
-            lines.pop()
-        page = embed(page, marker, lines)
-        print("embedded %s: %d lines" % (path.name, len(lines)))
-    PAGE.write_text(page)
+    check_download_source()
 
 
 if __name__ == "__main__":
