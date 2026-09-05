@@ -2,12 +2,15 @@
 # Axur pre-meeting report.
 #
 #   bash axur-report.sh
-#   bash axur-report.sh --brand "BRAND" --domain customer.com --key YOUR_API_KEY
+#   bash axur-report.sh --brand "BRAND" --domain customer.com --key-file ~/.axur-key
 #
 # Anything you leave off, it asks for.
 #
 #   --config FILE     read customer settings from FILE. Command-line flags win
 #   --save-config F   save this run's customer settings to F (never the API key)
+#   --key-file FILE   read the API key from the first line of FILE. There is no
+#                     --key flag: an argument is visible to every user on the
+#                     machine in ps, and it lands in the shell history
 #   --rows N          rows to pull behind each number (default 50)
 #   --wait SECONDS    how long to let each search finish (default 300). A big
 #                     tenant needs longer; a count taken early is too low
@@ -34,7 +37,7 @@
 #   --debug           show the raw replies
 
 API="https://api.axur.com/gateway/1.0/api/threat-hunting-api/external"
-BRAND=""; DOMAIN=""; KEY=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
+BRAND=""; DOMAIN=""; KEY=""; KEYFILE=""; ROWS=50; BFID=""; OUT=""; DEBUG=""; NOPDF=""; NOOPEN=""
 MINSCORE=""; EXCLUDE=""; EXCLUDEFILE=""; PAGECAP=40; WAIT=300
 DAYS=30; MASKPW=""
 LOGOSRC=""; NOLOGO=""; DROPOWN=""; CONFIG=""; SAVECONFIG=""
@@ -100,7 +103,10 @@ while [ $# -gt 0 ]; do
     --save-config) need_value "$1" $#; SAVECONFIG="$2"; shift 2 ;;
     --brand)      need_value "$1" $#; BRAND="$2"; shift 2 ;;
     --domain)     need_value "$1" $#; DOMAIN="$2"; shift 2 ;;
-    --key)        need_value "$1" $#; KEY="$2"; shift 2 ;;
+    --key-file)   need_value "$1" $#; KEYFILE="$2"; shift 2 ;;
+    --key)        echo "--key is gone: an API key on the command line is visible in ps." >&2
+                  echo "Use --key-file FILE, or leave it off and type it when asked." >&2
+                  exit 1 ;;
     --rows)       need_value "$1" $#; ROWS="$2"; shift 2 ;;
     --wait)       need_value "$1" $#; WAIT="$2"; shift 2 ;;
     --days)       need_value "$1" $#; DAYS="$2"; shift 2 ;;
@@ -118,7 +124,7 @@ while [ $# -gt 0 ]; do
     --debug)      DEBUG=1; shift ;;
     --no-pdf)     NOPDF=1; shift ;;
     --no-open)    NOOPEN=1; shift ;;
-    -h|--help)    sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
     *)            echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -127,20 +133,53 @@ ask() { # ask VAR flag "prompt" [hidden]
   eval "V=\$$1"
   [ -n "$V" ] && return
   if [ ! -t 0 ]; then echo "Missing --$2, and there is no terminal to ask on." >&2; exit 1; fi
+  # bash -x prints the value of every assignment it makes. Typing the key at a
+  # hidden prompt only to have the trace write it to the terminal defeats the
+  # prompt, so turn tracing off around the read and put it back after.
+  case $- in *x*) XT=1; set +x ;; *) XT="" ;; esac
   if [ -n "$4" ]; then printf '%s: ' "$3" >&2; read -r -s A; printf '\n' >&2
   else printf '%s: ' "$3" >&2; read -r A; fi
   eval "$1=\$A"
+  A=""
+  [ -n "$XT" ] && set -x
+  return 0
 }
 ask BRAND  brand  "Customer brand, as Axur spells it"
 ask DOMAIN domain "Customer domain"
-ask KEY    key    "Axur API key (input hidden)" hidden
+# A file is the only way to hand the key over without a terminal. It is read
+# here, under the same tracing guard, and the file itself is never copied.
+if [ -z "$KEY" ] && [ -n "$KEYFILE" ]; then
+  KEYFILE=$(expand_user_path "$KEYFILE")
+  if [ ! -r "$KEYFILE" ]; then
+    echo "Key file not found or not readable: $KEYFILE" >&2; exit 1
+  fi
+  case $- in *x*) XT=1; set +x ;; *) XT="" ;; esac
+  IFS= read -r KEY < "$KEYFILE" || true
+  KEY=$(printf '%s' "$KEY" | sed 's/\r$//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+  [ -n "$XT" ] && set -x
+  if [ -z "$KEY" ]; then echo "Key file is empty: $KEYFILE" >&2; exit 1; fi
+fi
+ask KEY    key-file "Axur API key (input hidden)" hidden
 if [ -z "$BRAND" ] || [ -z "$DOMAIN" ] || [ -z "$KEY" ]; then
   echo "Brand, domain and key are all needed." >&2; exit 1
 fi
 
 DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z' | sed 's#^[a-z]*://##; s/^www\.//; s#/.*##')
-LABEL=$(printf '%s' "$DOMAIN" | cut -d. -f1)
+# LABEL is the one value that goes into a query without quotes around it, so
+# quoting it is no defence. Keep only what a real domain label can hold.
+LABEL=$(printf '%s' "$DOMAIN" | cut -d. -f1 | tr -cd 'A-Za-z0-9-')
 [ -z "$OUT" ] && OUT="axur-report-$LABEL.html"
+
+# --out is a path the script overwrites without asking, and the report holds
+# leaked passwords. A value of ../../.ssh/config, or an absolute path from a
+# --config file somebody was handed, writes there. Keep the write inside the
+# folder the run started in.
+OUTDIR_ASKED=$(cd "$(dirname "$OUT")" 2>/dev/null && pwd) || {
+  echo "There is no directory $(dirname "$OUT") to write $OUT into." >&2; exit 1; }
+case "$OUTDIR_ASKED/." in
+  "$PWD"/*) ;;
+  *) echo "--out must stay inside $PWD, and $OUTDIR_ASKED is outside it." >&2; exit 1 ;;
+esac
 
 # The cover writes the brand, the domain and the two logo sources into HTML
 # attributes. A quote in
@@ -155,6 +194,18 @@ html_escape() { # html_escape TEXT -> the same text, safe inside an attribute
 }
 BRAND_H=$(html_escape "$BRAND")
 DOMAIN_H=$(html_escape "$DOMAIN")
+
+# The same values are also dropped straight into an Axur query, inside its own
+# double quotes. A quote in the brand closes that string and the rest becomes
+# query syntax, so a brand of  Larkspur" OR emailDomain="  searches somebody
+# else's tenant data into this customer's report. Escape for the query language
+# here; start_search escapes the finished query again for JSON, which is the
+# layer above and a separate job.
+query_escape() { # query_escape TEXT -> the same text, safe inside a query string
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+BRAND_Q=$(query_escape "$BRAND")
+DOMAIN_Q=$(query_escape "$DOMAIN")
 
 # Brandfetch serves a real logo when the page sends a Referer. A file opened
 # straight off disk does not, so the cover writes the name out instead.
@@ -229,7 +280,13 @@ if [ -n "$SAVECONFIG" ]; then
 fi
 
 TMP=$(mktemp -d)
+# EXIT alone leaves the replies, and the key header, on disk when the run is
+# interrupted. Ctrl-C is the common case: the searches are slow and people stop
+# them. Name the signals too, and exit from the handler so EXIT still fires.
 trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; exit 130' INT
+trap 'rm -rf "$TMP"; exit 143' TERM
+trap 'rm -rf "$TMP"; exit 129' HUP
 
 # The key must not reach the process list. ps shows every argument of every
 # process to every user on the machine, and the key used to be one of curl's
@@ -254,8 +311,13 @@ if [ -n "$MASKPW" ]; then
   PWNOTE="Leaked passwords are masked: first and last character at most."
 fi
 
+# Same guard as the prompt: the trace would print the key here too.
+case $- in *x*) XT=1; set +x ;; *) XT="" ;; esac
 AUTH="$TMP/auth"
 (umask 077; printf 'Authorization: Bearer %s\n' "$KEY" > "$AUTH")
+# Nothing below needs the key itself, only the header file, so drop it.
+KEY=""
+[ -n "$XT" ] && set -x
 N=0
 
 # Fetch the logo here rather than leaving it to the reader's browser. Brandfetch
@@ -333,7 +395,7 @@ fi
 # clause was thrown away.
 if [ -n "$CHECKDAYS" ]; then
   FUTURE=$(( ( $(date +%s) + 365 * 86400 ) * 1000 ))
-  PROBE="emailDomain=\"$DOMAIN\" AND detectionDate>=$FUTURE"
+  PROBE="emailDomain=\"$DOMAIN_Q\" AND detectionDate>=$FUTURE"
   echo "Asking Axur for records newer than a year from now."
   echo "  $PROBE"
   PESC=$(printf '%s' "$PROBE" | sed 's/\\/\\\\/g; s/"/\\"/g')
@@ -428,7 +490,7 @@ start_search() { # start_search NAME SOURCE QUERY
       000) printf ' no network reply. Check your connection or proxy.\n' ;;
       *)   printf ' could not start (HTTP %s)\n' "$CODE" ;;
     esac
-    printf '{"name":%s,"query":%s,"total":null,"data":[]}' "\"$NAME\"" "\"$(printf '%s' "$QUERY" | sed 's/"/\\"/g')\"" > "$TMP/$N.json"
+    printf '{"name":%s,"query":%s,"total":null,"data":[]}' "\"$NAME\"" "\"$(printf '%s' "$QUERY" | sed 's/\\/\\\\/g; s/"/\\"/g')\"" > "$TMP/$N.json"
     : > "$TMP/$N.failed"
     return
   fi
@@ -496,21 +558,36 @@ collect_search() { # collect_search N
         # exactly PAGECAP pages used to report itself truncated. Asking for one
         # more page settles it, and asking inside the loop means the fetch and
         # the freshness test are written once rather than twice.
-        PREVROW=$(printf '%s' "$OUTJ" | cksum)
+        # Each page used to cost a subshell for curl, a subshell and a grep to
+        # see whether it had a data array, a second pair to see whether that
+        # array had rows, a third for cksum, and a fourth for sed. Forty pages
+        # across three searches is over a thousand short-lived processes, all
+        # of them re-reading the same page held in a variable. Write the page
+        # to a file once, then look at it once and checksum it once: curl, sed,
+        # grep, cksum. The page is compared after the sed, so the first page is
+        # put through the same sed to give the comparison something to match.
+        PREVROW=$(printf '%s' "$OUTJ" | sed -E "s#</#<\\\\/#g${MASKSED}" | cksum)
         P=2
         while [ "$P" -le $((PAGECAP + 1)) ]; do
-          PG=$(curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH")
+          PGF="$TMP/$N.page$P"
+          curl -s "$API/search/$ID?page=$P&alias=true" -H "@$AUTH" \
+            | sed -E "s#</#<\\\\/#g${MASKSED}" > "$PGF"
           # Running out of rows and the request failing both used to end the
           # walk the same quiet way, and the filtered count then went on the
           # cover as a total. A reply carrying no data array is not a page.
-          printf '%s' "$PG" | grep -q '"data":\[' || { PARTIAL=1; break; }
-          printf '%s' "$PG" | grep -q '"data":\[[[:space:]]*{' || break
-          THISROW=$(printf '%s' "$PG" | cksum)
-          [ "$THISROW" = "$PREVROW" ] && break
+          # One grep answers both questions: nothing matched means no array,
+          # and a match ending in { means the array has rows in it.
+          DSTATE=$(grep -o -m1 -E '"data":\[[[:space:]]*\{?' "$PGF")
+          case "$DSTATE" in
+            '')    rm -f "$PGF"; PARTIAL=1; break ;;
+            *'{')  ;;
+            *)     rm -f "$PGF"; break ;;
+          esac
+          THISROW=$(cksum < "$PGF")
+          [ "$THISROW" = "$PREVROW" ] && { rm -f "$PGF"; break; }
           # a real page beyond the cap is the one thing that means "there was more"
-          [ "$P" -gt "$PAGECAP" ] && { PARTIAL=1; break; }
+          [ "$P" -gt "$PAGECAP" ] && { rm -f "$PGF"; PARTIAL=1; break; }
           PREVROW="$THISROW"
-          printf '%s' "$PG" | sed -E "s#</#<\\\\/#g${MASKSED}" > "$TMP/$N.page$P"
           PAGES=$((PAGES+1))
           P=$((P+1))
         done
@@ -521,7 +598,7 @@ collect_search() { # collect_search N
   # splice the reply into the report and let the browser parse it
   {
     printf '{"name":"%s","query":"%s","total":%s,"reply":' \
-      "$NAME" "$(printf '%s' "$QUERY" | sed 's/"/\\"/g')" "${TOTAL:-null}"
+      "$NAME" "$(printf '%s' "$QUERY" | sed 's/\\/\\\\/g; s/"/\\"/g')" "${TOTAL:-null}"
     # The reply goes into the report as it arrived, passwords included. Only
     # "</" is rewritten, because it would end the script block the payload sits
     # in. See the note on the cover for what that means for handling the file.
@@ -533,9 +610,9 @@ collect_search() { # collect_search N
 echo ""
 echo "Searching for $BRAND ($DOMAIN)"
 echo "-------------------------------------------"
-start_search "Leaked credentials" credential  "emailDomain=\"$DOMAIN\""
-start_search "In plaintext"       credential  "emailDomain=\"$DOMAIN\" AND passwordType=\"PLAIN\""
-start_search "Phishing pages"     signal-lake "impersonatedBrandsHigh=\"$BRAND\""
+start_search "Leaked credentials" credential  "emailDomain=\"$DOMAIN_Q\""
+start_search "In plaintext"       credential  "emailDomain=\"$DOMAIN_Q\" AND passwordType=\"PLAIN\""
+start_search "Phishing pages"     signal-lake "impersonatedBrandsHigh=\"$BRAND_Q\""
 # The report draws the mail-enabled count as part of the lookalike count, so the
 # two searches must start from the same set. They did not: the parent used the
 # cleaned label and the subset used the plain one, which matches far more, and
@@ -748,6 +825,24 @@ if [ -x /usr/bin/perl ]; then
 fi
 
 # ---------- build the report ----------
+# The file about to be written holds the customer's leaked passwords in full.
+# Left to the default umask it lands readable by everyone with an account on
+# the machine. Create it empty and owner-only first, then append into it, so
+# there is no moment where it exists with the wider mode.
+if ! (umask 077; : > "$OUT"); then
+  echo "Could not write $OUT." >&2; exit 1
+fi
+chmod 600 "$OUT" 2>/dev/null || true
+
+# The headline line of each reply was scanned out of the file twice: once for
+# the totals block in the report, and again for the summary printed at the end.
+# Both scans read the whole reply, which is megabytes. Cut it out once here and
+# let both readers take it from the small file.
+for f in "$TMP"/*.json; do
+  sed -n 's/^{"name":"\([^"]*\)","query":"\(.*\)","total":\([^,]*\),.*/{"name":"\1","query":"\2","total":\3}/p' \
+    "$f" | head -1 > "$f.head"
+done
+
 printf 'Writing the report ' >&2
 {
 cat <<HTMLHEAD
@@ -755,9 +850,10 @@ cat <<HTMLHEAD
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threat exposure: $BRAND_H</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- No web fonts. This file holds leaked passwords, and a stylesheet fetched
+     from fonts.googleapis.com tells Google the moment the customer opens it,
+     from which address, on which machine. The stacks below are fonts the
+     reader already has. -->
 <style>
  /* ---------- Infoblox palette ---------- */
  :root{
@@ -768,8 +864,8 @@ cat <<HTMLHEAD
    --red:#c9362d; --amber:#8a6300;
    --ink:#101820; --body:#3d454c; --mute:#6a7078; --faint:#9aa1a8;
    --line:#e3e6e8; --zebra:#f6f6f3; --paper:#fff;
-   --sans:Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;
-   --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;
+   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
  }
  *{box-sizing:border-box}
  html,body{margin:0;padding:0}
@@ -1042,7 +1138,7 @@ FIRST=1
 for f in "$TMP"/*.json; do
   [ $FIRST -eq 1 ] || echo ','
   FIRST=0
-  sed -n 's/^{"name":"\([^"]*\)","query":"\(.*\)","total":\([^,]*\),.*/{"name":"\1","query":"\2","total":\3}/p' "$f"
+  cat "$f.head"
 done
 echo ']</script>'
 
@@ -1481,7 +1577,7 @@ for f in "$TMP"/*.json; do
 done
 
 echo '</main></body></html>'
-} > "$OUT" || { echo '' >&2; echo "Could not write $OUT." >&2; exit 1; }
+} >> "$OUT" || { echo '' >&2; echo "Could not write $OUT." >&2; exit 1; }
 
 # A full disk, a read-only folder or a name that is a directory all let the
 # redirection fail while the script carried on and said "done". Check the file
@@ -1524,6 +1620,7 @@ elif [ -n "$CHROME" ]; then
   "$CHROME" --headless --disable-gpu --no-pdf-header-footer \
             --virtual-time-budget=15000 --print-to-pdf="$PDF" \
             "file://$ABS" >/dev/null 2>&1
+  chmod 600 "$PDF" 2>/dev/null || true
   if [ -s "$PDF" ]; then
     echo " ... wrote $PDF"
     DONE="$PDF"; PDF_WRITTEN="$PDF"
@@ -1541,7 +1638,7 @@ echo "Summary"
 K=1
 while [ "$K" -le "$COUNT" ]; do
   NAME=$(cat "$TMP/$K.name")
-  TOTAL=$(sed -n 's/^{"name":"[^"]*","query":".*","total":\([^,]*\),.*/\1/p' "$TMP/$K.json" | head -1)
+  TOTAL=$(sed -n 's/.*,"total":\(.*\)}$/\1/p' "$TMP/$K.json.head")
   [ -n "$TOTAL" ] || TOTAL="not available"
   [ "$TOTAL" = "null" ] && TOTAL="not available"
   printf '  %-26s %s\n' "$NAME" "$TOTAL"

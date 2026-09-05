@@ -2,12 +2,15 @@
   Axur pre-meeting report.
 
     powershell -ExecutionPolicy Bypass -File axur-report.ps1
-    powershell -ExecutionPolicy Bypass -File axur-report.ps1 -Brand "BRAND" -Domain customer.com -ApiKey YOUR_KEY
+    powershell -ExecutionPolicy Bypass -File axur-report.ps1 -Brand "BRAND" -Domain customer.com -KeyFile C:\axur-key.txt
 
   Anything you leave off, it asks for.
 
     -Config FILE    read customer settings from FILE. Command-line flags win
     -SaveConfig F   save this run's customer settings to F (never the API key)
+    -KeyFile FILE   read the API key from the first line of FILE. There is no
+                    -ApiKey flag: an argument is visible to anyone who can list
+                    processes, and it lands in the PowerShell history file
     -Rows N         rows listed under each count (default 50)
     -Wait SECONDS   how long to let each search finish (default 300)
     -Days N         only records Axur saw in the last N days (default 30).
@@ -35,7 +38,7 @@
   there, not here, then re-run the generator.
 #>
 param(
-  [string]$Brand, [string]$Domain, [string]$ApiKey, [string]$Config, [string]$SaveConfig,
+  [string]$Brand, [string]$Domain, [string]$KeyFile, [string]$Config, [string]$SaveConfig,
   [int]$Rows = 50, [int]$Wait = 300, [string]$MinScore, [string]$Exclude, [string]$ExcludeFile, [string]$Out,
   [string]$Logo, [switch]$NoLogo, [switch]$DropOwn, [int]$Days = 30, [switch]$AllTime, [switch]$CheckDays,
   [switch]$MaskPasswords, [switch]$NoPdf, [switch]$NoOpen, [switch]$ShowRaw
@@ -120,6 +123,18 @@ if ($Days -lt 0) { Write-Host "-Days takes a number of days, not $Days."; exit 1
 
 $Brand  = Ask $Brand  "Brand, as Axur spells it" $false
 $Domain = Ask $Domain "Customer domain" $false
+
+# A file is the only way to hand the key over without a console. The key itself
+# is never written anywhere by this script, and the file is not copied.
+$ApiKey = $null
+if ($KeyFile) {
+  $KeyFile = Expand-UserPath $KeyFile
+  if (-not (Test-Path -LiteralPath $KeyFile)) {
+    Write-Host "Key file not found: $KeyFile"; exit 1
+  }
+  $ApiKey = (Get-Content -LiteralPath $KeyFile -TotalCount 1).Trim()
+  if (-not $ApiKey) { Write-Host "Key file is empty: $KeyFile"; exit 1 }
+}
 $ApiKey = Ask $ApiKey "Axur API key" $true
 
 $Domain = ($Domain -replace '^[a-z]+://', '' -replace '^www\.', '').Split('/')[0].ToLower()
@@ -127,8 +142,33 @@ $Domain = ($Domain -replace '^[a-z]+://', '' -replace '^www\.', '').Split('/')[0
 # first component and names the file after it. This kept the last three
 # components and named the file after the whole domain, so the same customer
 # gave the two platforms a different search and a different filename.
-$label = ($Domain.Split('.') | Where-Object { $_ })[0]
+# $label is the one value that goes into a query without quotes around it, so
+# quoting it is no defence. Keep only what a real domain label can hold.
+$label = (($Domain.Split('.') | Where-Object { $_ })[0] -replace '[^A-Za-z0-9-]', '')
+
+# Brand and domain are dropped straight into an Axur query, inside its own
+# double quotes. A quote in the brand closes that string and the rest becomes
+# query syntax, so a brand of  Larkspur" OR emailDomain="  searches somebody
+# else's tenant data into this customer's report. Escape for the query language
+# here; Start-Search serialises the finished query to JSON, which is the layer
+# above and a separate job.
+$brandQ  = $Brand.Replace('\','\\').Replace('"','\"')
+$domainQ = $Domain.Replace('\','\\').Replace('"','\"')
+
 if (-not $Out) { $Out = "axur-report-$label.html" }
+
+# -Out is a path the script overwrites without asking, and the report holds
+# leaked passwords. A value of ..\..\secrets.html, or an absolute path from a
+# -Config file somebody was handed, writes there. Keep the write inside the
+# folder the run started in.
+$outParent = Split-Path -Parent $Out
+if (-not $outParent) { $outParent = '.' }
+try { $outFull = (Resolve-Path -LiteralPath $outParent).Path }
+catch { Write-Host "There is no folder $outParent to write $Out into."; exit 1 }
+$here = (Get-Location).Path
+if ($outFull -ne $here -and -not $outFull.StartsWith($here + [IO.Path]::DirectorySeparatorChar)) {
+  Write-Host "-Out must stay inside $here, and $outFull is outside it."; exit 1
+}
 
 if ($SaveConfig) {
   $SaveConfig = Expand-UserPath $SaveConfig
@@ -163,7 +203,7 @@ $dateWarned = $false
 # that, so a working filter returns zero.
 if ($CheckDays) {
   $future = [long]([DateTimeOffset]::UtcNow.AddDays(365).ToUnixTimeMilliseconds())
-  $probe  = 'emailDomain="' + $Domain + '" AND detectionDate>=' + $future
+  $probe  = 'emailDomain="' + $domainQ + '" AND detectionDate>=' + $future
   Write-Host "Asking Axur for records newer than a year from now."
   Write-Host "  $probe"
   $pstart = $null
@@ -283,8 +323,7 @@ $partial = @(); $incomplete = @()
 # -MaskPasswords rewrites the value before it reaches the file, so the masked
 # form is what lands in the report. One character each end is enough to
 # recognise a password you already hold and useless to anyone who does not.
-function Hide-Passwords($text) {
-  if (-not $MaskPasswords) { return $text }
+function Hide-PasswordValues($text) {
   # A quote or a backslash inside a password arrives escaped. Matching to the
   # next quote stopped inside the escape, left part of the password behind, and
   # for a value ending in a backslash escaped the closing quote and broke the
@@ -294,6 +333,11 @@ function Hide-Passwords($text) {
   $t = [regex]::Replace($text,  '"password"\s*:\s*"([^"\\])[^"\\]*([^"\\])"', '"password":"$1*****$2"')
   $t = [regex]::Replace($t,     '"password"\s*:\s*"([^"\\])?"', '"password":"*"')
   return [regex]::Replace($t,   '"password"\s*:\s*"([^"\\]|\\.)*\\.([^"\\]|\\.)*"', '"password":"*****"')
+}
+
+function Hide-Passwords($text) {
+  if (-not $MaskPasswords) { return $text }
+  return Hide-PasswordValues $text
 }
 
 function Test-Keep($row) {
@@ -393,7 +437,7 @@ function Complete-Search($job) {
   # Axur answers with a total long before it has finished searching: the reply
   # carries running=true and a totalResults still climbing. Taking the first
   # number reports a fraction as if it were the whole.
-  $total = $null; $raw = $null; $running = $true
+  $total = $null; $raw = $null; $running = $true; $o = $null
   # At least one attempt. [int]($Wait / 2) is 0 for -Wait 1, so the loop never
   # ran, no reply was ever read, and every search reported "timed out".
   $tries = [Math]::Max(1, [int]($Wait / 2))
@@ -415,9 +459,14 @@ function Complete-Search($job) {
     $script:incomplete += $name
   }
   else { Write-Host ("  {0,-26} done: $total" -f $name) }
-  if ($ShowRaw) { Write-Host "  $raw" }
+  # -ShowRaw used to print the reply as it arrived, so every leaked password
+  # went to the console, the scrollback, and any transcript or log the console
+  # was writing to. Mask them here whatever -MaskPasswords says: the point of
+  # -ShowRaw is the shape of the reply, never the passwords in it.
+  if ($ShowRaw) { Write-Host ("  " + (Hide-PasswordValues $raw)) }
 
-  $doc = if ($raw) { $raw | ConvertFrom-Json } else { $null }
+  # E2: $raw was parsed here a second time. One parse, one object.
+  $doc = $o
   # $found, not $rows: PowerShell variable names are case-insensitive, so a
   # local $rows IS the -Rows parameter. Filling it with the result rows left
   # Select-Object -First holding an array, and the run died on the first search
@@ -479,9 +528,9 @@ Write-Host ""
 Write-Host "Searching for $Brand ($Domain)"
 Write-Host "-------------------------------------------"
 $jobs = @(
-  (Start-Search "Leaked credentials"         "credential"  "emailDomain=`"$Domain`""),
-  (Start-Search "In plaintext"               "credential"  "emailDomain=`"$Domain`" AND passwordType=`"PLAIN`""),
-  (Start-Search "Phishing pages"             "signal-lake" "impersonatedBrandsHigh=`"$Brand`""),
+  (Start-Search "Leaked credentials"         "credential"  "emailDomain=`"$domainQ`""),
+  (Start-Search "In plaintext"               "credential"  "emailDomain=`"$domainQ`" AND passwordType=`"PLAIN`""),
+  (Start-Search "Phishing pages"             "signal-lake" "impersonatedBrandsHigh=`"$brandQ`""),
   (Start-Search "Lookalike domains"          "signal-lake" "sanitizedDomainLabel=$label~1"),
   (Start-Search "Mail-enabled lookalikes"    "signal-lake" "sanitizedDomainLabel=$label~1 AND dnsRecordMX=*")
 )
@@ -503,9 +552,10 @@ $head = @'
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threat exposure: {{BRAND}}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- No web fonts. This file holds leaked passwords, and a stylesheet fetched
+     from fonts.googleapis.com tells Google the moment the customer opens it,
+     from which address, on which machine. The stacks below are fonts the
+     reader already has. -->
 <style>
  /* ---------- Infoblox palette ---------- */
  :root{
@@ -516,8 +566,8 @@ $head = @'
    --red:#c9362d; --amber:#8a6300;
    --ink:#101820; --body:#3d454c; --mute:#6a7078; --faint:#9aa1a8;
    --line:#e3e6e8; --zebra:#f6f6f3; --paper:#fff;
-   --sans:Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;
-   --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;
+   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
  }
  *{box-sizing:border-box}
  html,body{margin:0;padding:0}
@@ -1214,6 +1264,24 @@ $head = $head.Replace('{{BRAND}}', (ConvertTo-HtmlText $Brand)).Replace('{{DOMAI
               Replace('{{PWNOTE}}', (ConvertTo-HtmlText $PWNOTE))
 $tail = $tail.Replace('ROWSVALUE', "$Rows")
 
+# The files about to be written hold the customer's leaked passwords in full.
+# Left to the folder's inherited rights they are readable by everyone the
+# folder is shared with. Strip the inheritance and leave one entry: this user.
+function Protect-File($path) {
+  try {
+    if ($IsLinux -or $IsMacOS) { & chmod 600 $path 2>$null | Out-Null; return }
+    $acl = Get-Acl -LiteralPath $path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+      $me, 'FullControl', 'Allow')))
+    Set-Acl -LiteralPath $path -AclObject $acl
+  } catch {
+    Write-Host "Warning: could not restrict who can read $path. It holds leaked passwords."
+  }
+}
+
 function Esc($s) { ($s -replace '\\', '\\' -replace '"', '\"') }
 
 $totals = ($results | ForEach-Object {
@@ -1239,6 +1307,10 @@ $doc = $head + "`n" +
        $tail + "`n" +
        $payload + "`n" +
        '</main></body></html>'
+# Create the file empty and locked down before the passwords go into it, so
+# there is no moment where it exists with the folder's wider rights.
+[IO.File]::WriteAllText($Out, '', (New-Object Text.UTF8Encoding $false))
+Protect-File $Out
 [IO.File]::WriteAllText($Out, $doc, (New-Object Text.UTF8Encoding $false))
 $abs = (Resolve-Path $Out).Path
 Write-Host "done"
@@ -1265,7 +1337,7 @@ if (-not $NoPdf) {
     Write-Host -NoNewline "Making the PDF"
     & $browser --headless --disable-gpu --no-pdf-header-footer `
                --virtual-time-budget=15000 "--print-to-pdf=$pdf" "file:///$($abs -replace '\\','/')" 2>$null | Out-Null
-    if (Test-Path $pdf) { Write-Host " ... wrote $pdf"; $done = $pdf; $pdfWritten = $pdf }
+    if (Test-Path $pdf) { Protect-File $pdf; Write-Host " ... wrote $pdf"; $done = $pdf; $pdfWritten = $pdf }
     else { Write-Host " ... failed. Open the HTML and press Ctrl+P." }
   } else {
     Write-Host "No Edge or Chrome found, so no PDF. Open the HTML and press Ctrl+P."
