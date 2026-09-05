@@ -17,9 +17,17 @@ what came out. It never talks to Axur, and it needs no API key of yours.
 | `/usr/bin/perl` | the scripts use it to filter and trim | some checks fail |
 | `curl` | the scripts use it, and the runner waits on the stand-in with it | nothing runs |
 | PowerShell 7 | runs `axur-report.ps1` | those checks say `skip`, and the summary counts them |
+| Chrome or Edge | opens the report, because the row order is decided there | those checks say `skip`, and the summary counts them |
 
 The runner looks for PowerShell in `$PWSH`, then on the `PATH`, then in
-`~/.local/pwsh/pwsh`. Set `PWSH` to point it somewhere else.
+`~/.local/pwsh/pwsh`. Set `PWSH` to point it somewhere else. It looks for a
+browser in the same places the report script does.
+
+A headless browser sometimes hands back the page before the rows are built.
+That page has empty tables, and reading it would say the rows are in the wrong
+order when they were never written. The report sets `data-report-ready="1"` on
+the html element as the last thing it does, so the runner renders again until
+the page says it finished, and reports `no-dom` rather than a wrong answer.
 
 ## What it does
 
@@ -39,6 +47,7 @@ variables steer it, so one server covers every case:
 | `FAKE_NODATE=1` | the API refuses any query with a date clause |
 | `FAKE_SHAPE=reference` | rows name the site in `reference`, with no `domain` |
 | `FAKE_NOSCORE=1` | rows carry no risk score |
+| `FAKE_LOWRISK=1` | every score sits under the high-risk cut-off |
 | `FAKE_SLOW=N` | every read takes N seconds |
 
 Set `PORT` to move the stand-in off 8731. The runner stops if something is

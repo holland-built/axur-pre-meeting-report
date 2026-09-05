@@ -1003,6 +1003,14 @@ cat <<HTMLHEAD
  .brands{line-height:1.4}
  .brands .you{font-weight:600}
  .more{font-size:12.5px;color:var(--mute);margin-top:9px}
+ /* the break between the rows that lead and the rest. It sets its own
+    background because the zebra rule above would stripe it like a data row.
+    break-after:avoid keeps it on the same printed page as the first row it
+    introduces; tr{break-inside:avoid} alone only stops the break row itself
+    splitting, and headless Chrome would leave it stranded at a page foot. */
+ tbody tr.brk td{background:var(--paper);color:var(--mute);font-size:12px;font-style:italic;line-height:1.4;
+                 padding:9px 10px 7px;border-top:2px solid var(--ink);border-bottom:1px solid var(--line)}
+ tr.brk{break-inside:avoid;break-after:avoid}
  .trail{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding-top:10px;border-top:1px solid var(--line);font-size:13px}
  .trail a{text-decoration:none}
  .trail .up{color:var(--mute)} .trail .next{color:var(--ink);font-weight:600}
@@ -1149,6 +1157,10 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
 (function(){
   'use strict';
   var ROWLIMIT = ROWSVALUE;
+  // 70 is where this report already colours a score red, so the order and
+  // the colour say the same thing from one constant; change HIGH and both
+  // move together.
+  var HIGH = 70;
   var HIDE = /datahubId|^id$/i;   // internal identifiers, not evidence
   var PREF = ['user','accessUrl','accessHost','sourceName','leakDisplayName',
               'domain','url','sourceUrl','riskScore','impersonatedBrandsHigh',
@@ -1278,7 +1290,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
       var x = Number(v);
       if (blank(v) || isNaN(x)) return none();
       x = Math.max(0, Math.min(100, x));
-      var band = x >= 70 ? 'r' : x >= 40 ? 'a' : '';
+      var band = x >= HIGH ? 'r' : x >= 40 ? 'a' : '';
       return '<span class="risk ' + band + '"><b>' + x.toFixed(1) + '</b><i style="--v:' + Math.max(2, Math.round(x)) + '%"></i></span>';
     },
     // the name as people see it first (renderedReference holds the accented form), the xn-- punycode
@@ -1441,27 +1453,42 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
     if (!Array.isArray(r) && d && Array.isArray(d.data)) r = d.data;
     return Array.isArray(r) ? r.filter(function(x){ return x && typeof x === 'object'; }) : [];
   }
-  // Highest risk first, and the top three marked. The rows that matter should
+  // Risk first, then a visible break, then date. The rows that matter should
   // be at the top of their section rather than wherever the API put them, and
-  // when the table is truncated it is the worst rows that survive. A search
-  // whose rows carry no score keeps the order Axur returned.
+  // when the table is truncated it is the worst rows that survive. Below the
+  // break the rest run newest first, by the day Axur found them.
   function riskOf(r){ var v = Number(r && r.riskScore); return (r && r.riskScore !== undefined && r.riskScore !== null && r.riskScore !== '' && !isNaN(v)) ? v : null; }
-  // A readable password is the one to reset first, so those rows lead. Same
-  // idea as byRisk, for the table that has no score.
-  function readableFirst(list){
-    function plain(r){ return r && String(r.passwordType || '').toUpperCase() === 'PLAIN' ? 0 : 1; }
-    if (!list.some(function(r){ return plain(r) === 0; })) return list;
-    return list.slice().sort(function(a, b){ return plain(a) - plain(b); });
-  }
-  function byRisk(list){
-    if (!list.some(function(r){ return riskOf(r) !== null; })) return list;
+  function newestFirst(list){
     return list.slice().sort(function(a, b){
-      var x = riskOf(a), y = riskOf(b);
-      if (x === null && y === null) return 0;
-      if (x === null) return 1;
-      if (y === null) return -1;
+      var x = dateOf(a && a.detectionDate), y = dateOf(b && b.detectionDate);
+      if (!x && !y) return 0;
+      if (!x) return 1;
+      if (!y) return -1;
       return y - x;
     });
+  }
+  // {lead, rest, why, scored}: the rows above the break, the rows below it,
+  // the sentence the break carries, and whether this table was ordered by
+  // score at all. An empty why means no break is drawn.
+  function split(name, list){
+    var lead = [], rest = [], why = '', scored = false;
+    if (name === 'Leaked credentials') {
+      // no score here; a readable password is the one to reset first
+      var plain = function(r){ return r && String(r.passwordType || '').toUpperCase() === 'PLAIN'; };
+      lead = newestFirst(list.filter(plain));
+      rest = newestFirst(list.filter(function(r){ return !plain(r); }));
+      why = 'Above this line: accounts whose password is readable. Below it: the rest, newest first.';
+    } else if (list.some(function(r){ return riskOf(r) !== null; })) {
+      scored = true;
+      lead = list.filter(function(r){ return riskOf(r) !== null && riskOf(r) >= HIGH; })
+                 .sort(function(a, b){ return riskOf(b) - riskOf(a); });
+      rest = newestFirst(list.filter(function(r){ return riskOf(r) === null || riskOf(r) < HIGH; }));
+      why = 'Above this line: risk ' + HIGH + ' or more, highest first, the point at which this report ' +
+            'colours a score red. Below it: everything else, newest first.';
+    } else {
+      rest = newestFirst(list);
+    }
+    return { lead: lead, rest: rest, why: why, scored: scored };
   }
 
   var secs = document.getElementById('sections');
@@ -1507,8 +1534,13 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
         // check whether the two lists differed. The count still leads the cover;
         // section 01 carries the evidence, with the readable ones at the top of
         // it and the Kind column saying which is which.
-        var order = t.name === 'Leaked credentials' ? readableFirst : byRisk;
-        var rs = order(rows(d)).slice(0, ROWLIMIT), total = n(t.name);
+        var sp = split(t.name, rows(d));
+        var rs = sp.lead.concat(sp.rest).slice(0, ROWLIMIT), total = n(t.name);
+        // What survives the cut. When lead alone is longer than --rows, no
+        // break is drawn and no date-ordered row is shown; the "first N of M
+        // records" line below the table is what tells the reader the table
+        // was cut. That is deliberate, not an oversight.
+        var nlead = Math.min(sp.lead.length, rs.length), nrest = rs.length - nlead;
         if (t.name === 'In plaintext') {
           box.innerHTML = '<p class="more">These ' + show(total) + ' accounts are the readable ' +
             'ones from section 01. They are listed there, at the top of the table, marked ' +
@@ -1532,7 +1564,19 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
           cs.map(function(c){ return '<col style="--w:' + (c.w * 0.96).toFixed(1) + '%;--wp:' + ((c.wp || c.w) * 0.96).toFixed(1) + '%">'; }).join('') +
           '</colgroup><thead><tr><th class="idx">#</th>' + ths.join('') + '</tr></thead><tbody>';
         rs.forEach(function(r, ri){
-          html += '<tr' + (ri < 3 && riskOf(r) !== null ? ' class="hi"' : '') +
+          // The break sits after the last lead row, and needs a row on both
+          // sides of it. A table where nothing reaches the cut-off has a why
+          // but no lead row, and without the nlead test the break was drawn at
+          // the very top with nothing above it, announcing a division that was
+          // not there.
+          if (ri === nlead && sp.why && nlead > 0 && nrest > 0) {
+            html += '<tr class="brk"><td colspan="' + (cs.length + 1) + '">' + sp.why + '</td></tr>';
+          }
+          // The mark is red, and red in this report means a high score. It
+          // belongs to a table ordered by score, not to a row that happens to
+          // carry a number: the credentials table leads on readable passwords,
+          // and a score arriving on one of its rows must not paint it red.
+          html += '<tr' + (ri < 3 && ri < nlead && sp.scored ? ' class="hi"' : '') +
             '><td class="idx">' + (ri + 1) + '</td>' +
             cs.map(function(c){ return '<td>' + cell(c.f, r[c.k], r) + '</td>'; }).join('') + '</tr>';
         });

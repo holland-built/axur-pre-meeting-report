@@ -28,9 +28,21 @@ PWSH=${PWSH:-}
 [ -z "$PWSH" ] && [ -x "$HOME/.local/pwsh/pwsh" ] && PWSH="$HOME/.local/pwsh/pwsh"
 [ -n "$PWSH" ] && [ ! -x "$PWSH" ] && PWSH=""
 
+# ---------- find Chrome, or say it is missing ----------
+# The row order is decided in the browser when the report is opened, so the
+# checks on it need a rendered page. The same candidates the script tries.
+CHROME=""
+for C in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
+         "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
+         "$(command -v google-chrome 2>/dev/null)" \
+         "$(command -v chromium 2>/dev/null)"; do
+  [ -n "$C" ] && [ -x "$C" ] && CHROME="$C" && break
+done
+
 # ---------- a private directory, cleared on the way out ----------
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/axur-tests.XXXXXX") || exit 1
-mkdir -p "$WORK/out" "$WORK/log"
+mkdir -p "$WORK/out" "$WORK/log" "$WORK/dom"
 SRVPID=""
 cleanup() {
   if [ -n "$SRVPID" ]; then kill "$SRVPID" 2>/dev/null; wait "$SRVPID" 2>/dev/null; fi
@@ -68,7 +80,7 @@ check() {
   if [ "$2" = "$3" ]; then echo "  ok    $1"; PASS=$((PASS+1))
   else echo "  FAIL  $1: want [$3] got [$2]"; FAIL=$((FAIL+1)); fi
 }
-skip() { echo "  skip  $1 (no PowerShell)"; SKIP=$((SKIP+1)); }
+skip() { echo "  skip  $1 (${2:-no PowerShell})"; SKIP=$((SKIP+1)); }
 
 # ---------- the stand-in API ----------
 # Start it, note its exact process id, and wait until it answers. Killing by
@@ -203,6 +215,73 @@ s=open(sys.argv[1]).read(); i=s.find('id=\"payload-1\"'); j=s.find('>',i)+1; k=s
 print(json.loads(s[j:k])['query'])" "$WORK/out/$1"
 }
 
+# The page as the browser leaves it, rows built and ordered. Only a report the
+# runner has signed off is rendered, and the rendering is read through domq,
+# which asks readable again, so the dump of a stale report is never counted.
+# The report sets data-report-ready="1" on the html element as the last thing
+# it does. Headless Chrome sometimes dumps the page before the rows are built,
+# and that dump has empty tables and no such attribute. Reading it would say
+# the rows are in the wrong order when they were never written. Render again
+# until the page says it finished, and give up loudly rather than quietly.
+dom() { # dom FILE -> renders $WORK/out/FILE into $WORK/dom/FILE
+  readable "$1" || return
+  local i=0
+  while [ $i -lt 4 ]; do
+    "$CHROME" --headless --disable-gpu --dump-dom --virtual-time-budget=20000 \
+              "file://$WORK/out/$1" >"$WORK/dom/$1" 2>/dev/null
+    grep -q 'data-report-ready="1"' "$WORK/dom/$1" && return 0
+    i=$((i+1))
+  done
+  : > "$WORK/dom/$1"
+  return 1
+}
+# One answer about one section of the rendered page:
+#   brk    how many break rows the table has
+#   risk   ok when every score above the break is >= 70 and every one below is < 70
+#   dates  ok when the rows below the break run newest first
+#   kind   ok when every row above the break is marked Readable
+#   place  ok when there is one break and it has a row above AND below it
+#   hi     how many rows carry the red high-risk mark
+domq() { # domq FILE SECTION QUESTION
+  readable "$1" || return
+  [ -s "$WORK/dom/$1" ] || { echo no-dom; return 1; }
+  grep -q 'data-report-ready="1"' "$WORK/dom/$1" || { echo no-dom; return 1; }
+  python3 -c '
+import re, sys
+from datetime import datetime
+s = open(sys.argv[1]).read(); sec = sys.argv[2]; q = sys.argv[3]
+m = re.search(r"<section[^>]*\bid=\"%s\"[^>]*>(.*?)</section>" % sec, s, re.S)
+if not m: print("no-section"); sys.exit()
+m2 = re.search(r"<tbody>(.*?)</tbody>", m.group(1), re.S)
+if not m2: print("no-table"); sys.exit()
+above, below, brk, seen = [], [], 0, False
+for tr in re.split(r"<tr\b", m2.group(1))[1:]:
+    if tr.lstrip().startswith("class=\"brk\""): brk += 1; seen = True; continue
+    (below if seen else above).append(tr)
+if q == "brk": print(brk); sys.exit()
+if q == "place":
+    print("ok" if brk == 1 and above and below else "bad:brk=%d above=%d below=%d" % (brk, len(above), len(below)))
+    sys.exit()
+if q == "rows": print(len(above) + len(below)); sys.exit()
+if q == "hi": print(sum(1 for t in above + below if t.lstrip().startswith("class=\"hi\""))); sys.exit()
+def risk(tr):
+    r = re.search(r"class=\"risk[^\"]*\"><b>([\d.]+)</b>", tr); return float(r.group(1)) if r else None
+def date(tr):
+    ds = re.findall(r"<span class=\"date\">(\d\d \w\w\w \d{4})", tr)
+    return datetime.strptime(ds[-1], "%d %b %Y") if ds else None
+if q == "risk":
+    bad = [risk(t) for t in above if risk(t) is None or risk(t) < 70] + \
+          [risk(t) for t in below if risk(t) is not None and risk(t) >= 70]
+    print("ok" if above and below and not bad else "bad:%r" % bad)
+elif q == "dates":
+    ds = [date(t) for t in below]
+    print("ok" if ds and None not in ds and all(a >= b for a, b in zip(ds, ds[1:])) else "bad:%r" % ds)
+elif q == "kind":
+    print("ok" if above and all("Readable" in t for t in above) else "bad")
+else: print("no-such-question")
+' "$WORK/dom/$1" "$2" "$3"
+}
+
 # Counting inside the query has to happen here, not in a pipe at the check.
 # "$(qy f.html | grep -c 'x')" counts the sentinel as zero matches, and zero is
 # exactly what three of these checks want, so an unreadable report would have
@@ -217,6 +296,7 @@ D=larkspurfinancial.com
 echo ""
 echo "Working in $WORK"
 [ -n "$PWSH" ] && echo "PowerShell: $PWSH" || echo "PowerShell: none found, those checks will be skipped"
+[ -n "$CHROME" ] && echo "Chrome: $CHROME" || echo "Chrome: none found, the rendered-page checks will be skipped"
 echo ""
 
 # ---------------------------------------------------------------- the checks
@@ -398,9 +478,63 @@ if [ -n "$PWSH" ]; then
   fi
 else skip "ps1 masked shape"; skip "ps1 no real password"; fi
 
+echo "-- risk first, then a break, then date --"
+# Section 03 is the phishing table, which carries a score; section 01 is the
+# credentials table, which does not. The fake API spreads its dates one day
+# apart, so newest-first is something the rows can get wrong.
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out ord.html
+if wrote "sh  ordered report" ord.html; then
+  if [ -n "$CHROME" ]; then
+    dom ord.html
+    check "sh  phishing: one break row"                  "$(domq ord.html s3 brk)"   "1"
+    check "sh  phishing: >= 70 above the break, < 70 below" "$(domq ord.html s3 risk)"  "ok"
+    check "sh  phishing: below the break, newest first"  "$(domq ord.html s3 dates)" "ok"
+    check "sh  credentials: one break row"               "$(domq ord.html s1 brk)"   "1"
+    check "sh  credentials: readable above the break"    "$(domq ord.html s1 kind)"  "ok"
+    check "sh  phishing: the break has a row on each side" "$(domq ord.html s3 place)" "ok"
+    check "sh  credentials: the break has a row on each side" "$(domq ord.html s1 place)" "ok"
+    # The red mark means a high score, and the JavaScript adds it when the
+    # report is opened, so this has to look at the rendered page. Reading the
+    # file on disk would find no mark either way and prove nothing.
+    check "sh  credentials: no row is marked high risk"  "$(domq ord.html s1 hi)" "0"
+    check "sh  phishing: the lead row is marked"         "$(domq ord.html s3 hi)" "1"
+  else
+    for c in "phishing: one break row" "phishing: >= 70 above the break, < 70 below" \
+             "phishing: below the break, newest first" "credentials: one break row" \
+             "credentials: readable above the break" "phishing: the break has a row on each side" \
+             "credentials: the break has a row on each side" \
+             "credentials: no row is marked high risk" "phishing: the lead row is marked"; \
+             do skip "sh  $c" "no Chrome"; done
+  fi
+fi
+# The same count from the PowerShell report proves the JavaScript was lifted.
+if [ -n "$PWSH" ] && [ -n "$CHROME" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out ord2.html
+  if wrote "ps1 ordered report" ord2.html; then
+    dom ord2.html
+    check "ps1 phishing: one break row"    "$(domq ord2.html s3 brk)" "1"
+    check "ps1 credentials: one break row" "$(domq ord2.html s1 brk)" "1"
+  fi
+elif [ -n "$PWSH" ]; then skip "ps1 phishing: one break row" "no Chrome"; skip "ps1 credentials: one break row" "no Chrome"
+else skip "ps1 phishing: one break row"; skip "ps1 credentials: one break row"; fi
+
 # ---- the suite proves its own guard ----
 # The old suite reported thirty passes while every run was failing, because it
 # read files an earlier run had left behind. Show here that this one cannot.
+echo "-- nothing reaches the cut-off, so there is no break to draw --"
+# Every score under 70. The sentence still applies to the search, but there is
+# no lead row, and a break with nothing above it announces a division that is
+# not there.
+serve FAKE_LOWRISK=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out low.html
+if wrote "sh  low-risk report" low.html; then
+  if [ -n "$CHROME" ]; then
+    dom low.html
+    check "sh  phishing: no break row"     "$(domq low.html s3 brk)"  "0"
+    check "sh  phishing: the rows are all still there" "$(domq low.html s3 rows)" "3"
+  else skip "sh  phishing: no break row" "no Chrome"; skip "sh  phishing: the rows are all still there" "no Chrome"; fi
+fi
+
 echo "-- the suite refuses a report this run did not write --"
 # A report left by another run: it exists, it is not empty, its date is new,
 # and it does not carry this run's word.
@@ -412,6 +546,8 @@ check "a missing report cannot be read"             "$(lines gone.html 'anything
 # report used to answer 0, and 0 is what three of the date checks want.
 check "an unsigned report fails a zero check"       "$(qyc stale.html 'detectionDate')" "not-verified"
 check "a missing report fails a zero check"         "$(qyc gone.html 'detectionDate')" "not-verified"
+# And a rendered page: an unsigned report is never rendered or read back.
+check "an unsigned report is not rendered"          "$(domq stale.html s1 brk)" "not-verified"
 # And the door works the other way: these two were signed off and still read.
 check "a signed report still reads"                 "$(lines a.html 'id="payload-')" "5"
 check "a signed query still reads"                  "$(qyc dw.html 'detectionDate>=')" "1"

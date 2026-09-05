@@ -19,6 +19,7 @@ SHAPE    = os.environ.get("FAKE_SHAPE", "")
 TOTALS   = [3412, 2906, 1184, 78, 31]  # "reference" = signal-lake rows, which carry no "domain"
 SLOW     = float(os.environ.get("FAKE_SLOW", "0"))
 NOSCORE  = os.environ.get("FAKE_NOSCORE") == "1"
+LOWRISK  = os.environ.get("FAKE_LOWRISK") == "1"   # every score under the high-risk cut-off
 NODATE   = os.environ.get("FAKE_NODATE") == "1"   # reject any query with a date clause
 LOG      = open(os.environ.get("FAKE_LOG", "/dev/null"), "a")
 
@@ -36,7 +37,7 @@ def row(seq, page):
             "host": "larkspurfinancial.com.%d-p%d.example" % (seq, page),
             "accessUrl": "http://larkspurfinancial.com.%d-p%d.example/login" % (seq, page),
             "riskScore": [55, 91, 34, 78, 12, 66][(seq + page) % 6],
-            "detectionDate": 1788429683595,
+            "detectionDate": 1788429683595 - (seq + page) * 86400000,
         }
     return {
         "id": "row-p%d-%d" % (page, seq),
@@ -46,7 +47,7 @@ def row(seq, page):
         "host": "larkspur%d-p%d.example" % (seq, page),
         "accessUrl": "http://larkspur%d-p%d.example/login" % (seq, page),
         "riskScore": [55, 91, 34, 78, 12, 66][(seq + page) % 6],
-        "detectionDate": 1788429683595,
+        "detectionDate": 1788429683595 - (seq + page) * 86400000,
         "passwordType": ["HASH", "PLAIN", "HASH", "PLAIN"][seq % 4],
         "password": "hunter2",
     }
@@ -54,6 +55,8 @@ def row(seq, page):
 def strip_scores(rows):
     if NOSCORE:
         for r in rows: r.pop("riskScore", None)
+    elif LOWRISK:
+        for r in rows: r["riskScore"] = min(r.get("riskScore", 0), 55)
     return rows
 
 
