@@ -655,7 +655,12 @@ cat > "$TMP/filter.pl" <<'PERL'
 use strict; use warnings;
 my ($min, $ex, $file, @more) = @ARGV;
 my @pats = grep { length } split /\s*,\s*/, ($ex // '');
-open my $fh, '<', $file or die; my $s = do { local $/; <$fh> };
+# The patterns are lowercased in ASCII only, once, and every value below the
+# same way. Perl's /i and .NET's ToLower disagree past ASCII, so the match is
+# a plain substring test on ASCII-folded bytes; Test-Keep in axur-report.ps1
+# does the same.
+tr/A-Z/a-z/ for @pats;
+open my $fh, '<:raw', $file or die; my $s = do { local $/; <$fh> }; close $fh;
 
 # The rows sit in the first "data":[ ... ] array. Walk it object by object,
 # string and escape aware, so a brace inside a value cannot fool the depth count.
@@ -691,11 +696,144 @@ for my $extra (@more) {
 }
 exit 1 unless @rows;
 
+# These subs are lifted from fold.pl, later in this file, word for word apart
+# from %READS; change one and change the other. The filter used to read a
+# value with a regex that stopped at the first quote and a score by taking the
+# digits off the front, while the PowerShell script read what its JSON parser
+# decoded, so the two dropped different rows from the same reply.
+# A value is read by decoding the JSON, not by a regex over the text: a quote
+# or a backslash inside a host name must not hand back half a value. jstring
+# decodes one string from pos(), every escape included, and refuses what JSON
+# refuses: a raw control character, an escape JSON does not have, a surrogate
+# escape without its other half. \uXXXX comes out as UTF-8 bytes, which is how
+# the rest of the file spells the same character.
+my %ESC = ('"' => '"', '\\' => '\\', '/' => '/', b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");
+# JSON's number and JSON's whitespace, no wider: a leading zero is not a
+# number and \f is not a space. Get-Num in axur-report.ps1 and System.Text.Json,
+# which checks each row there, draw the same lines, so the scripts agree on
+# which rows they can read.
+my $NUM = qr/-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?/;
+my $WS = qr/[ \t\r\n]/;
+# How deep a row may nest before it is not read: the row object is level 1,
+# and every array or object inside it adds one. 64 is the limit System.Text.Json
+# applies in axur-report.ps1, set there explicitly to the same number; measured,
+# both sides read a row with 63 nested arrays and refuse one with 64. Real rows
+# nest two or three deep, so nothing Axur sends comes near it.
+# One difference stays, on purpose: this script cuts each row out of the raw
+# text, so it has no ceiling on the page as a whole and a row nested past
+# 1020 containers is still one refused row, kept. axur-report.ps1 parses the
+# whole page first and its parser gives up at 1024 levels (the envelope takes
+# four), so there the same page fails the search and no report is written.
+# That is how it treats any page it cannot read, and is a separate question.
+my $MAXDEPTH = 64;
+# One well-formed UTF-8 character, as bytes. A run of raw bytes in a string
+# has to be made of these, or the row is not something to fold on.
+my $UTF8 = qr/[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2}/;
+sub jstring {
+  my $out = '';
+  return undef unless $_[0] =~ /\G"/gc;
+  while (1) {
+    if ($_[0] =~ /\G([^"\\\x00-\x1f]+)/gc) { my $run = $1; return undef unless $run =~ /^(?:$UTF8)*\z/; $out .= $run; next }
+    return $out if $_[0] =~ /\G"/gc;
+    if ($_[0] =~ /\G\\u([0-9a-fA-F]{4})/gc) {
+      my $cp = hex $1;
+      if ($cp >= 0xD800 && $cp <= 0xDBFF) {
+        return undef unless $_[0] =~ /\G\\u([dD][c-fC-F][0-9a-fA-F]{2})/gc;
+        $cp = 0x10000 + (($cp - 0xD800) << 10) + (hex($1) - 0xDC00);
+      } elsif ($cp >= 0xDC00 && $cp <= 0xDFFF) { return undef }
+      my $ch = chr $cp; utf8::encode($ch); $out .= $ch; next;
+    }
+    if ($_[0] =~ /\G\\(["\\\/bfnrt])/gc) { $out .= $ESC{$1}; next }
+    return undef;
+  }
+}
+# Step over one JSON value of any kind, checking it as it goes. 0 when it is
+# not JSON, so a nested object that would not parse leaves its row unread.
+# $d is the level an array or object opened here would sit at.
+sub jvalue {
+  my $d = $_[1];
+  $_[0] =~ /\G$WS+/gc;
+  if (substr($_[0], pos($_[0]) // 0, 1) eq '"') { return defined jstring($_[0]) ? 1 : 0 }
+  return 1 if $_[0] =~ /\G$NUM/gc;
+  return 1 if $_[0] =~ /\G(?:true|false|null)/gc;
+  return 0 if $d > $MAXDEPTH && substr($_[0], pos($_[0]) // 0, 1) =~ /[\[{]/;
+  if ($_[0] =~ /\G\[$WS*/gc) {
+    return 1 if $_[0] =~ /\G\]/gc;
+    while (1) {
+      return 0 unless jvalue($_[0], $d + 1);
+      $_[0] =~ /\G$WS+/gc;
+      next if $_[0] =~ /\G,/gc;
+      return $_[0] =~ /\G\]/gc ? 1 : 0;
+    }
+  }
+  if ($_[0] =~ /\G\{$WS*/gc) {
+    return 1 if $_[0] =~ /\G\}/gc;
+    while (1) {
+      return 0 unless defined jstring($_[0]);
+      return 0 unless $_[0] =~ /\G$WS*:/gc;
+      return 0 unless jvalue($_[0], $d + 1);
+      $_[0] =~ /\G$WS+/gc;
+      next if $_[0] =~ /\G,$WS*/gc;
+      return $_[0] =~ /\G\}/gc ? 1 : 0;
+    }
+  }
+  return 0;
+}
+# The top-level fields of one row: ['s', text] for a string, ['n', text] for a
+# number; true, false, null and anything nested are checked and skipped. undef
+# when the row is not well-formed JSON, or when a field the filter reads appears
+# twice: this script would take the first and PowerShell's parser the last,
+# and neither is more than a guess. A row that does not parse is kept.
+my %READS = map { $_ => 1 } ('riskScore', 'domain', 'url', 'sourceUrl', 'accessHost',
+                             'reference', 'renderedReference', 'host', 'accessUrl');
+sub fields {
+  my (%f, %seen);
+  pos($_[0]) = 0;
+  return undef unless $_[0] =~ /\G$WS*\{$WS*/gc;
+  return \%f if $_[0] =~ /\G\}$WS*\z/gc;
+  while (1) {
+    my $k = jstring($_[0]); return undef unless defined $k;
+    return undef if $READS{$k} && $seen{$k}++;
+    return undef unless $_[0] =~ /\G$WS*:$WS*/gc;
+    my $c = substr($_[0], pos($_[0]) // 0, 1);
+    if ($c eq '"') { my $v = jstring($_[0]); return undef unless defined $v; $f{$k} = ['s', $v] unless exists $f{$k} }
+    elsif ($_[0] =~ /\G($NUM)/gc) { $f{$k} = ['n', $1] unless exists $f{$k} }
+    elsif ($_[0] =~ /\G(?:true|false|null)/gc) { }
+    elsif ($c eq '[' || $c eq '{') { return undef unless jvalue($_[0], 2) }   # the row is level 1
+    else { return undef }
+    $_[0] =~ /\G$WS+/gc;
+    next if $_[0] =~ /\G,$WS*/gc;
+    return \%f if $_[0] =~ /\G\}$WS*\z/gc;
+    return undef;
+  }
+}
+# A number, from a number or from a string written the way JSON writes a
+# number; undef otherwise. The PowerShell script applies the same grammar, so
+# neither side takes "NaN" or "Infinity" and neither can pick a different row.
+sub numv {
+  my ($f, $k) = @_; my $x = $f->{$k}; return undef unless $x;
+  return $x->[1] + 0 if $x->[1] =~ /^$NUM\z/;
+  return undef;
+}
+# The rule for a row the filter cannot read, shared with Test-Keep in
+# axur-report.ps1; change one and change the other:
+#   - a row that is not well-formed JSON, or that writes a field the filter
+#     reads twice, is KEPT: the filter cannot judge what it cannot read
+#   - a riskScore that is missing, null, not a string or number, or not a
+#     number by the one grammar ("5x", "NaN") is no score, and --min-score
+#     does not drop the row
+#   - a site field that is missing, null or not a string is not matched, and
+#     never drops the row on its own
+# Keeping is the safe side for a filter. The report goes to a customer: a row
+# the filter cannot judge stays in the table where a reader can see it and
+# take it out, rather than vanishing from the count with no trace.
 my @keep;
 ROW: for my $r (@rows) {
+  my $fld = fields($r);
+  if (!$fld) { push @keep, $r; next ROW }
   if (defined $min && length $min) {
-    my ($sc) = $r =~ /"riskScore"\s*:\s*"?([0-9.]+)"?/;
-    next ROW if defined $sc && $sc + 0 < $min + 0;
+    my $sc = numv($fld, 'riskScore');
+    next ROW if defined $sc && $sc < $min + 0;
   }
   # Match a pattern anywhere in a field that names a site. The tables for
   # phishing pages and mail-enabled lookalikes name the site in "reference",
@@ -703,10 +841,10 @@ ROW: for my $r (@rows) {
   # table did nothing at all. Read the fields once, not once per pattern: the
   # values do not change between patterns, and the scan is over the whole row.
   for my $f (qw(domain url sourceUrl accessHost reference renderedReference host accessUrl)) {
-    my ($v) = $r =~ /"$f"\s*:\s*"([^"]*)"/;
-    next unless defined $v;
+    my $x = $fld->{$f}; next unless $x && $x->[0] eq 's';
+    (my $v = $x->[1]) =~ tr/A-Z/a-z/;
     for my $pat (@pats) {
-      next ROW if $v =~ /\Q$pat\E/i;
+      next ROW if index($v, $pat) >= 0;
     }
   }
   push @keep, $r;
@@ -798,7 +936,24 @@ if (!defined $end) { print $s; exit 0 }
 # escape without its other half. \uXXXX comes out as UTF-8 bytes, which is how
 # the rest of the file spells the same character.
 my %ESC = ('"' => '"', '\\' => '\\', '/' => '/', b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");
-my $NUM = qr/-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?/;
+# JSON's number and JSON's whitespace, no wider: a leading zero is not a
+# number and \f is not a space. Get-Num in axur-report.ps1 and System.Text.Json,
+# which checks each row there, draw the same lines, so the scripts agree on
+# which rows they can read.
+my $NUM = qr/-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?/;
+my $WS = qr/[ \t\r\n]/;
+# How deep a row may nest before it is not read: the row object is level 1,
+# and every array or object inside it adds one. 64 is the limit System.Text.Json
+# applies in axur-report.ps1, set there explicitly to the same number; measured,
+# both sides read a row with 63 nested arrays and refuse one with 64. Real rows
+# nest two or three deep, so nothing Axur sends comes near it.
+# One difference stays, on purpose: this script cuts each row out of the raw
+# text, so it has no ceiling on the page as a whole and a row nested past
+# 1020 containers is still one refused row, kept. axur-report.ps1 parses the
+# whole page first and its parser gives up at 1024 levels (the envelope takes
+# four), so there the same page fails the search and no report is written.
+# That is how it treats any page it cannot read, and is a separate question.
+my $MAXDEPTH = 64;
 # One well-formed UTF-8 character, as bytes. A run of raw bytes in a string
 # has to be made of these, or the row is not something to fold on.
 my $UTF8 = qr/[\x00-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2}/;
@@ -822,28 +977,31 @@ sub jstring {
 }
 # Step over one JSON value of any kind, checking it as it goes. 0 when it is
 # not JSON, so a nested object that would not parse leaves its row unfolded.
+# $d is the level an array or object opened here would sit at.
 sub jvalue {
-  $_[0] =~ /\G\s+/gc;
+  my $d = $_[1];
+  $_[0] =~ /\G$WS+/gc;
   if (substr($_[0], pos($_[0]) // 0, 1) eq '"') { return defined jstring($_[0]) ? 1 : 0 }
   return 1 if $_[0] =~ /\G$NUM/gc;
   return 1 if $_[0] =~ /\G(?:true|false|null)/gc;
-  if ($_[0] =~ /\G\[\s*/gc) {
+  return 0 if $d > $MAXDEPTH && substr($_[0], pos($_[0]) // 0, 1) =~ /[\[{]/;
+  if ($_[0] =~ /\G\[$WS*/gc) {
     return 1 if $_[0] =~ /\G\]/gc;
     while (1) {
-      return 0 unless jvalue($_[0]);
-      $_[0] =~ /\G\s+/gc;
+      return 0 unless jvalue($_[0], $d + 1);
+      $_[0] =~ /\G$WS+/gc;
       next if $_[0] =~ /\G,/gc;
       return $_[0] =~ /\G\]/gc ? 1 : 0;
     }
   }
-  if ($_[0] =~ /\G\{\s*/gc) {
+  if ($_[0] =~ /\G\{$WS*/gc) {
     return 1 if $_[0] =~ /\G\}/gc;
     while (1) {
       return 0 unless defined jstring($_[0]);
-      return 0 unless $_[0] =~ /\G\s*:/gc;
-      return 0 unless jvalue($_[0]);
-      $_[0] =~ /\G\s+/gc;
-      next if $_[0] =~ /\G,\s*/gc;
+      return 0 unless $_[0] =~ /\G$WS*:/gc;
+      return 0 unless jvalue($_[0], $d + 1);
+      $_[0] =~ /\G$WS+/gc;
+      next if $_[0] =~ /\G,$WS*/gc;
       return $_[0] =~ /\G\}/gc ? 1 : 0;
     }
   }
@@ -859,21 +1017,21 @@ my %READS = map { $_ => 1 } ('host', 'domain', 'reference', 'riskScore', 'detect
 sub fields {
   my (%f, %seen);
   pos($_[0]) = 0;
-  return undef unless $_[0] =~ /\G\s*\{\s*/gc;
-  return \%f if $_[0] =~ /\G\}\s*\z/gc;
+  return undef unless $_[0] =~ /\G$WS*\{$WS*/gc;
+  return \%f if $_[0] =~ /\G\}$WS*\z/gc;
   while (1) {
     my $k = jstring($_[0]); return undef unless defined $k;
     return undef if $READS{$k} && $seen{$k}++;
-    return undef unless $_[0] =~ /\G\s*:\s*/gc;
+    return undef unless $_[0] =~ /\G$WS*:$WS*/gc;
     my $c = substr($_[0], pos($_[0]) // 0, 1);
     if ($c eq '"') { my $v = jstring($_[0]); return undef unless defined $v; $f{$k} = ['s', $v] unless exists $f{$k} }
     elsif ($_[0] =~ /\G($NUM)/gc) { $f{$k} = ['n', $1] unless exists $f{$k} }
     elsif ($_[0] =~ /\G(?:true|false|null)/gc) { }
-    elsif ($c eq '[' || $c eq '{') { return undef unless jvalue($_[0]) }
+    elsif ($c eq '[' || $c eq '{') { return undef unless jvalue($_[0], 2) }   # the row is level 1
     else { return undef }
-    $_[0] =~ /\G\s+/gc;
-    next if $_[0] =~ /\G,\s*/gc;
-    return \%f if $_[0] =~ /\G\}\s*\z/gc;
+    $_[0] =~ /\G$WS+/gc;
+    next if $_[0] =~ /\G,$WS*/gc;
+    return \%f if $_[0] =~ /\G\}$WS*\z/gc;
     return undef;
   }
 }
@@ -882,7 +1040,7 @@ sub fields {
 # neither side takes "NaN" or "Infinity" and neither can pick a different row.
 sub numv {
   my ($f, $k) = @_; my $x = $f->{$k}; return undef unless $x;
-  return $x->[1] + 0 if $x->[1] =~ /^$NUM$/;
+  return $x->[1] + 0 if $x->[1] =~ /^$NUM\z/;
   return undef;
 }
 # The fold key: the first non-empty of host, domain, reference, with any

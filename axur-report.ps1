@@ -301,15 +301,21 @@ $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
 $bySite    = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
 $byAccount = @("Leaked credentials", "In plaintext")
 $foldable  = $bySite + $byAccount
+# Lowercase in ASCII only. .NET's ToLower and Perl's /i disagree on letters past
+# ASCII, so the fold key, the account key and the exclusion match all use this,
+# and filter.pl and fold.pl in axur-report.sh do the same with tr/A-Z/a-z/.
+function ConvertTo-AsciiLower($s) {
+  return [regex]::Replace([string]$s, '[A-Z]', [Text.RegularExpressions.MatchEvaluator]{ param($m) $m.Value.ToLowerInvariant() })
+}
 # lowercased once here, because Test-Keep compares them against every field of
-# every row and $p.ToLower() inside that loop redid the work thousands of times
-$patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
+# every row and lowering inside that loop redid the work thousands of times
+$patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object { ConvertTo-AsciiLower $_ })
 
 # The customer's own sites are not impersonating the customer, but the searches
 # match on the name, so their own domains come back as impersonation sites and
 # as lookalikes. -DropOwn takes them out. Not the default: any filter forces a
 # full page walk to recount, so a large result runs slower and stops at the cap.
-if ($DropOwn) { $patterns += $Domain.ToLower() }
+if ($DropOwn) { $patterns += ConvertTo-AsciiLower $Domain }
 
 # A customer's own domains run to dozens, so take them from a file as well as
 # the command line. One per line, or the first column of a CSV. A "domain"
@@ -319,7 +325,7 @@ if ($ExcludeFile) {
   $fromFile = Get-Content $ExcludeFile | ForEach-Object {
     ($_ -replace '#.*', '').Split(',')[0].Trim().Trim('"').Trim("'")
   } | Where-Object { $_ -and $_ -notmatch '^(?i)domains?$' }
-  $patterns += @($fromFile | ForEach-Object { $_.ToLower() })
+  $patterns += @($fromFile | ForEach-Object { ConvertTo-AsciiLower $_ })
   Write-Host "Excluding $($patterns.Count) patterns from $ExcludeFile"
 }
 $anyFilter = ($MinScore -or $patterns.Count)
@@ -348,22 +354,37 @@ function Hide-Passwords($text) {
   return Hide-PasswordValues $text
 }
 
+# The fields an exclusion is matched against. This list is lifted from
+# axur-report.sh by the builder; edit it there.
+$excludeFields = @('domain', 'url', 'sourceUrl', 'accessHost', 'reference', 'renderedReference', 'host', 'accessUrl')
+# The same rule as filter.pl in axur-report.sh, given the treatment fold.pl and
+# Merge-Rows have: a field is read by its exact name and only as the type it
+# is; the score goes through Get-Num, the one number grammar, so "5x" and "NaN"
+# are not scores; the match is a substring test on ASCII-lowercased text.
+# The rule for a row the filter cannot read, shared with filter.pl; change one
+# and change the other:
+#   - a row that is not well-formed JSON, or that writes a field the filter
+#     reads twice (Set-Unfilterable marks those), is KEPT: the filter cannot
+#     judge what it cannot read
+#   - a riskScore that is missing, null, not a string or number, or not a
+#     number by the one grammar is no score, and -MinScore does not drop the row
+#   - a site field that is missing, null or not a string is not matched, and
+#     never drops the row on its own
+# Keeping is the safe side for a filter. The report goes to a customer: a row
+# the filter cannot judge stays in the table where a reader can see it and
+# take it out, rather than vanishing from the count with no trace.
 function Test-Keep($row) {
+  if (Test-Unfilterable $row) { return $true }
   if ($MinScore) {
-    $sc = $row.riskScore
-    # a score of "N/A", or an object, must not take the report down
-    $n = 0.0
-    if ($null -ne $sc -and [double]::TryParse([string]$sc, [ref]$n)) {
-      if ($n -lt [double]$MinScore) { return $false }
-    }
+    $sc = Get-Num (Get-Prop $row 'riskScore')
+    if ($null -ne $sc -and $sc -lt [double]$MinScore) { return $false }
   }
-  # Match a pattern anywhere in a field that names a site. This list is lifted
-  # from axur-report.sh by the builder; edit it there. Read each field once, not
-  # once per pattern: the value does not change between patterns.
-  foreach ($f in @('domain', 'url', 'sourceUrl', 'accessHost', 'reference', 'renderedReference', 'host', 'accessUrl')) {
-    $v = $row.$f
-    if (-not $v) { continue }
-    $lower = ([string]$v).ToLower()
+  # Read each field once, not once per pattern: the value does not change
+  # between patterns.
+  foreach ($f in $excludeFields) {
+    $v = Get-Prop $row $f
+    if ($v -isnot [string]) { continue }
+    $lower = ConvertTo-AsciiLower $v
     foreach ($p in $patterns) {
       if ($lower.Contains($p)) { return $false }
     }
@@ -375,9 +396,6 @@ function Test-Keep($row) {
 # axur-report.sh: the key is the first non-empty of host, domain, reference
 # with any scheme and path taken off, lowercased in ASCII only so the two
 # scripts cannot disagree on a letter. Only the three site searches fold.
-function ConvertTo-AsciiLower($s) {
-  return [regex]::Replace([string]$s, '[A-Z]', [Text.RegularExpressions.MatchEvaluator]{ param($m) $m.Value.ToLowerInvariant() })
-}
 # A property by its exact name. $row.host would also answer for "Host", and
 # fold.pl, which reads the lowercase names Axur sends, would not.
 function Get-Prop($row, $name) {
@@ -425,12 +443,13 @@ function Get-Plain($row) {
   return 0
 }
 # A number, from a number or from a string written the way JSON writes a
-# number; $null otherwise. .NET would also take "NaN" and "Infinity", which
-# fold.pl's grammar does not, and NaN never loses a comparison.
+# number; $null otherwise. .NET would also take "NaN", "Infinity" and a leading
+# zero, which the $NUM grammar in fold.pl and filter.pl does not, and NaN never
+# loses a comparison. \z, not $: a string ending in a newline is not a number.
 function Get-Num($v) {
   if ($null -eq $v) { return $null }
   $t = [string]$v
-  if ($t -notmatch '^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$') { return $null }
+  if ($t -notmatch '^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?\z') { return $null }
   $n = 0.0
   if ([double]::TryParse($t, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { return $n }
   return $null
@@ -443,9 +462,23 @@ function Get-Num($v) {
 # with the same string-aware brace count fold.pl uses, and test every string
 # token. A row that names a field the fold reads twice is bad as well: this
 # parser keeps the last value and fold.pl the first, so the two would guess
-# differently. One $true or $false per row, in order.
+# differently. And the Perl reads the whole row through a strict grammar, so a
+# row this parser tolerates - a trailing comma, a bare NaN, a comment - is one
+# it refuses; each row's text goes through System.Text.Json, which refuses the
+# same things, rather than through a second hand-written grammar. It does not
+# refuse a lone surrogate escape (checked on pwsh 7.6.5 / .NET 10: it repairs
+# it) nor a repeated key, so the two checks above stay beside it. Its nesting
+# limit is set here and not left to its default: the row object is level 1 and
+# every array or object inside adds one; $MAXDEPTH in fold.pl and filter.pl is
+# the same 64. Measured, both sides read a row holding 63 nested arrays and
+# refuse one holding 64. Real rows nest two or three deep.
+# One $true or $false per row, in order. $reads names the fields
+# whose repeat makes a row bad: the fold's list for the fold, the filter's for
+# the filter, because each script reads a different set and a row is only
+# unreadable to the pass that reads the repeated field.
 $foldReads = @('host', 'domain', 'reference', 'riskScore', 'detectionDate',
                'user', 'passwordType', 'accessHost', 'accessUrl', 'url')
+$filterReads = @('riskScore') + $excludeFields
 function Test-JsonString($tok) {
   if ($tok -match '[\x00-\x1f]') { return $false }
   $high = $false; $highEnd = -1
@@ -462,12 +495,21 @@ function Test-JsonString($tok) {
   }
   return (-not $high)
 }
-function Get-BadRows($text) {
+# This limit is on one row. Before any row reaches it, Complete-Search has read
+# the WHOLE page with ConvertFrom-Json, whose own ceiling is 1024 levels; the
+# reply envelope takes four, so a row nested past 1020 containers fails the
+# page, the search dies and no report is written. The Perl in axur-report.sh
+# cuts rows out of the raw text with no page ceiling, so the same page gives a
+# Mac report with one refused row kept. Recorded here, not closed: failing a
+# search on any page it cannot read is how this script behaves throughout.
+$jsonOpts = [System.Text.Json.JsonDocumentOptions]::new(); $jsonOpts.MaxDepth = 64
+function Get-BadRows($text, $reads) {
   $bad = New-Object System.Collections.ArrayList
   $i = $text.IndexOf('"data"'); if ($i -lt 0) { return $bad }
   $i = $text.IndexOf('[', $i); if ($i -lt 0) { return $bad }
-  $depth = 0; $rowBad = $false; $expectKey = $false; $seen = $null
-  foreach ($m in [regex]::Matches($text.Substring($i + 1), '(?s)"(?:[^"\\]|\\.)*"|[{}\[\],]')) {
+  $body = $text.Substring($i + 1)
+  $depth = 0; $rowBad = $false; $expectKey = $false; $seen = $null; $rowStart = 0
+  foreach ($m in [regex]::Matches($body, '(?s)"(?:[^"\\]|\\.)*"|[{}\[\],]')) {
     $t = $m.Value
     if ($t -eq ',') { if ($depth -eq 1) { $expectKey = $true }; continue }
     if ($t[0] -eq '"') {
@@ -475,18 +517,24 @@ function Get-BadRows($text) {
       if ($depth -eq 1 -and $expectKey) {
         # a key at the row's own level; decode it only when it carries an escape
         $k = if ($t.Contains('\')) { try { $t | ConvertFrom-Json } catch { $t } } else { $t.Substring(1, $t.Length - 2) }
-        if ($foldReads -ccontains $k) { if ($seen.Contains($k)) { $rowBad = $true } else { [void]$seen.Add($k) } }
+        if ($reads -ccontains $k) { if ($seen.Contains($k)) { $rowBad = $true } else { [void]$seen.Add($k) } }
         $expectKey = $false
       }
       continue
     }
     if ($t -eq '{' -or $t -eq '[') {
-      if ($depth -eq 0) { $rowBad = $false; $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal); $expectKey = ($t -eq '{') }
+      if ($depth -eq 0) { $rowBad = $false; $rowStart = $m.Index; $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal); $expectKey = ($t -eq '{') }
       $depth++; continue
     }
     if ($depth -eq 0) { break }        # the ] that ends the array
     $depth--
-    if ($depth -eq 0) { [void]$bad.Add($rowBad) }
+    if ($depth -eq 0) {
+      if (-not $rowBad) {
+        try { ([System.Text.Json.JsonDocument]::Parse($body.Substring($rowStart, $m.Index + 1 - $rowStart), $jsonOpts)).Dispose() }
+        catch { $rowBad = $true }
+      }
+      [void]$bad.Add($rowBad)
+    }
   }
   return $bad
 }
@@ -498,12 +546,25 @@ function Get-BadRows($text) {
 # can reach it.
 $unfoldable = New-Object 'System.Collections.Generic.HashSet[object]' ([System.Collections.Generic.ReferenceEqualityComparer]::Instance)
 function Set-Unfoldable($rows, $text) {
-  $bad = Get-BadRows $text
+  $bad = Get-BadRows $text $foldReads
   for ($j = 0; $j -lt $rows.Count -and $j -lt $bad.Count; $j++) {
     if ($bad[$j] -and $null -ne $rows[$j]) { [void]$script:unfoldable.Add($rows[$j]) }
   }
 }
 function Test-Unfoldable($row) { return ($null -ne $row -and $script:unfoldable.Contains($row)) }
+# The same set for the filter, over the fields the filter reads. The filter
+# runs before the fold and reads a different list, so it needs its own pass
+# over the raw text: once a reply is parsed a repaired string looks whole and
+# a repeated field has one value, and Test-Keep would judge a row filter.pl
+# refused to read.
+$unfilterable = New-Object 'System.Collections.Generic.HashSet[object]' ([System.Collections.Generic.ReferenceEqualityComparer]::Instance)
+function Set-Unfilterable($rows, $text) {
+  $bad = Get-BadRows $text $filterReads
+  for ($j = 0; $j -lt $rows.Count -and $j -lt $bad.Count; $j++) {
+    if ($bad[$j] -and $null -ne $rows[$j]) { [void]$script:unfilterable.Add($rows[$j]) }
+  }
+}
+function Test-Unfilterable($row) { return ($null -ne $row -and $script:unfilterable.Contains($row)) }
 # The row that stands for the group: highest score, then newest date, then
 # the one seen first. A missing score sits below every score, and a missing
 # date before every date. A credential row has no score; a readable password
@@ -709,8 +770,9 @@ function Complete-Search($job) {
   # Select-Object -First holding an array, and the run died on the first search
   # with "Cannot convert 'System.Object[]' to the type 'System.Int32'".
   $found = @(); if ($doc) { $found = @($doc.result.data) }
-  $script:unfoldable.Clear()
+  $script:unfoldable.Clear(); $script:unfilterable.Clear()
   if ($foldable -contains $name) { Set-Unfoldable $found $raw }
+  if ($anyFilter -and $filtered -contains $name) { Set-Unfilterable $found $raw }
 
   # A filtered number is only honest if it was counted over every row, so when a
   # filter is on we walk the pages. The API ignores page-size parameters, so
@@ -744,6 +806,7 @@ function Complete-Search($job) {
       if ($p -gt $PageCap) { $script:partial += $name; break }
       $prevKey = $pg
       Set-Unfoldable $pr $pg
+      Set-Unfilterable $pr $pg
       $found += $pr
       $p++
     }

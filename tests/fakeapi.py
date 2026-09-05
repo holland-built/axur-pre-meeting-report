@@ -28,6 +28,23 @@ Behaviour is steered by environment variables so one server covers every test:
                     row that survives the fold, are </script><img src=x onerror=alert(1)>),
                     sitecase (NETFLIX.COM, then https://netflix.com/path with no
                     accessHost, so five sites not six), many (ten sites)
+  FAKE_FILTERROW=KIND
+                    the first row of page 1 of a signal-lake search is made awkward
+                    for the filter: escquote (the site is own"quote.example, the
+                    quote escaped), unicode (the site is written \\u0075nic\\u006fde.example),
+                    score5x (riskScore is the string "5x"), casefold (the site is
+                    caf\u00c9.example, capital E acute), missing (no site field at
+                    all), null (domain is null and there is no other site field),
+                    twice (domain is the only site field and is written twice),
+                    comma (the row ends with a trailing comma), nanlit (riskScore
+                    is a bare NaN, not a string), zero (riskScore is 01, a leading
+                    zero), formfeed (a \\f between { and the first key): none of
+                    these is JSON, and every one is kept
+  FAKE_DEEP=N       every row of page 1 of a signal-lake search carries a field
+                    "extra" nested N arrays deep. The row itself is level 1, so 63
+                    is the deepest row both scripts read and 64 the first they refuse.
+                    The envelope adds four levels, so 1020 is the deepest page
+                    PowerShell's parser reads at all and 1021 the first it refuses
   FAKE_CREDMIX=KIND page 1 of the first credential search holds an account with
                     2 PLAIN rows and 3 hashed rows, a row of that account with
                     no passwordType, and a row whose passwordType is a lone
@@ -60,6 +77,8 @@ ODDTOTAL = os.environ.get("FAKE_ODDTOTAL") == "1" # totalResults is not a number
 CREDDUPES = os.environ.get("FAKE_CREDDUPES") == "1"  # page 1 repeats one account across sites
 CREDODD  = os.environ.get("FAKE_CREDODD", "")      # xss | sitecase | many, see above
 CREDMIX  = os.environ.get("FAKE_CREDMIX", "")      # mixed | all, see above
+DEEP     = int(os.environ.get("FAKE_DEEP", "0"))     # nest "extra" this many arrays deep
+FILTERROW = os.environ.get("FAKE_FILTERROW", "")   # escquote | unicode | score5x | casefold | missing | null | twice | comma | nanlit | zero | formfeed
 LOG      = open(os.environ.get("FAKE_LOG", "/dev/null"), "a")
 
 SEARCHES = {}   # id -> {"n": ordinal, "query": ..., "source": ...}
@@ -140,6 +159,36 @@ def dupes(rows):
     out.append(lone)
     return out
 
+def filterrow(rows):
+    """The first row of page 1 of a signal-lake search, made awkward for the
+    filter. Every field that names the site gets the same value, so the row is
+    dropped or kept on that value alone. The rule both filters follow: a row
+    they cannot read is kept, and a field they cannot read never drops a row."""
+    r = rows[0]
+    site = ("domain", "reference", "renderedReference", "host", "accessUrl")
+    if FILTERROW == "escquote":
+        for f in site: r[f] = 'own"quote.example'      # json.dumps writes the quote as \"
+    elif FILTERROW == "unicode":
+        for f in site: r[f] = "UESC.example"           # UESC becomes \u escapes in do_GET
+    elif FILTERROW == "score5x":
+        r["riskScore"] = "5x"
+    elif FILTERROW == "casefold":
+        for f in site: r[f] = "caf\u00c9.example"      # capital E acute; json.dumps writes \u00c9
+    elif FILTERROW in ("missing", "null", "twice"):
+        for f in site: r.pop(f, None)
+        if FILTERROW == "null": r["domain"] = None
+        if FILTERROW == "twice":
+            r["domain"] = "larkspur1-p1.example"; r["domainDUP"] = "larkspur1-p1.example"   # DUP is cut off in do_GET
+    elif FILTERROW == "comma":
+        r["TRAIL"] = 1                                 # becomes a trailing comma in do_GET
+    elif FILTERROW == "nanlit":
+        r["riskScore"] = "NANLIT"                      # the quotes come off in do_GET
+    elif FILTERROW == "zero":
+        r["riskScore"] = "ZEROLIT"                     # becomes a bare 01 in do_GET
+    elif FILTERROW == "formfeed":
+        rows[0] = {"FFMARK": 1, **r}                   # becomes a raw \f after { in do_GET
+    return rows
+
 def cred_dupes():
     """Page 1 of a credential search: abelle on six sites, the third of them
     PLAIN and not the newest, so the row that stands for the group is decided
@@ -215,6 +264,13 @@ def body(sid, page):
     rows = [row(i, page) for i in range(1, 4)]
     if DUPES and page == 1 and meta.get("source") == "signal-lake":
         rows = dupes(rows)
+    if FILTERROW and page == 1 and meta.get("source") == "signal-lake":
+        rows = filterrow(rows)
+    if DEEP and page == 1 and meta.get("source") == "signal-lake":
+        for r in rows:
+            v = 1
+            for _ in range(DEEP): v = [v]
+            r["extra"] = v
     if CREDDUPES and page == 1 and meta.get("source") == "credential":
         rows = cred_dupes()
     if CREDMIX and page == 1 and meta.get("source") == "credential":
@@ -277,11 +333,15 @@ class H(BaseHTTPRequestHandler):
                 self.send({"id": sid, "result": {"status": {"running": False,
                           "totalResults": 300}, "data": []}})
                 return
-        if ODDROW in ("control", "duphost", "duprisk"):
+        if ODDROW in ("control", "duphost", "duprisk") or FILTERROW in ("unicode", "twice", "comma", "nanlit", "zero", "formfeed"):
             # json.dumps escapes the byte and a dict cannot hold a key twice; the
-            # point is text JSON forbids, so write the text and then alter it
+            # point is text JSON forbids, so write the text and then alter it.
+            # UESC becomes "unicode" spelt with \u escapes for two of its letters.
             raw = json.dumps(body(sid, page), separators=(",", ":"))
-            self.send(None, raw=raw.replace("\\u0001", "\x01").replace('DUP":', '":'))
+            self.send(None, raw=raw.replace("\\u0001", "\x01").replace('DUP":', '":')
+                                   .replace("UESC", "\\u0075nic\\u006fde")
+                                   .replace(',"TRAIL":1}', ',}').replace('"NANLIT"', 'NaN')
+                                   .replace('"ZEROLIT"', '01').replace('"FFMARK":1,', '\x0c'))
             return
         self.send(body(sid, page))
 

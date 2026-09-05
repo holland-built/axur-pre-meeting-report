@@ -801,6 +801,124 @@ if [ -n "$PWSH" ]; then
   fi
 else skip "ps1 NaN does not win"; fi
 
+echo "-- the two filters agree on awkward rows --"
+# The first row of page 1 is made awkward for the filter, and the other two
+# rows of the page are plain. The rule, in filter.pl and Test-Keep alike: a row
+# the filter cannot read is kept, and a field it cannot read never drops a row.
+# Each case names how many of the three rows stay, and both scripts must agree.
+#   escquote  the site is own"quote.example, the quote escaped; the shell used to
+#             read the value up to the first quote and miss it
+#   unicode   the site is spelt with \u escapes; the shell used to match the text
+#   score5x   "5x" is not a score, so --min-score 60 keeps the row; the shell used
+#             to read 5 off the front and drop it. 78 stays too, 12 goes
+#   casefold  the site is cafÉ.example: café does not match past ASCII on either
+#             side, where .NET's ToLower used to; caf matches, proving the row is seen
+#   missing/null/twice  domain is the only site field and it is missing, null,
+#             or written twice; the row is kept while .example drops the others
+#   comma     the row ends with a trailing comma; nanlit: riskScore is a bare NaN.
+#             PowerShell's parser takes both and Perl refuses both, so each row is
+#             kept on both sides though every site field matches .example
+#   zero      riskScore is 01: a leading zero is not a JSON number, so the row is
+#             not read and --min-score 60 keeps it, where Perl used to read 1
+#   formfeed  a raw \f sits between { and the first key: not JSON whitespace, so
+#             the row is not read and is kept though every site field matches
+for CASE in "escquote exclude quote.example 2" "unicode exclude unicode.example 2" "score5x min-score 60 2" \
+            "casefold exclude café.example 3" "casefold exclude caf 2" \
+            "missing exclude .example 1" "null exclude .example 1" "twice exclude .example 1" \
+            "comma exclude .example 1" "nanlit exclude .example 1" \
+            "zero min-score 60 2" "formfeed exclude .example 1"; do
+  read -r K FLAG VAL WANT <<< "$CASE"
+  case "$FLAG" in exclude) PSFLAG=-Exclude ;; *) PSFLAG=-MinScore ;; esac
+  serve FAKE_FILTERROW=$K FAKE_PAGES=1
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 "--$FLAG" "$VAL" --out "fl$K$WANT.html"
+  if wrote "sh  $K, $FLAG $VAL" "fl$K$WANT.html"; then
+    check "sh  $K, $FLAG $VAL keeps $WANT"  "$(tot "fl$K$WANT.html")" "3412,2906,$WANT,$WANT,$WANT"
+  fi
+  if [ -n "$PWSH" ]; then
+    runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 "$PSFLAG" "$VAL" -Out "fl${K}${WANT}2.html"
+    if wrote "ps1 $K, $FLAG $VAL" "fl${K}${WANT}2.html"; then
+      check "ps1 $K, $FLAG $VAL keeps $WANT" "$(tot "fl${K}${WANT}2.html")" "3412,2906,$WANT,$WANT,$WANT"
+    fi
+  else skip "ps1 $K, $FLAG $VAL keeps $WANT"; fi
+done
+
+echo "-- one nesting limit on both sides --"
+# Every row of page 1 carries a field nested N arrays deep. Both scripts read a
+# row of 63 (the row itself is level 1, so that is depth 64, the limit) and
+# refuse one of 64. Read, the rows are judged: .example drops all three. Refused,
+# they are kept. The same rows reach the fold: read, the four repeats fold;
+# refused, nothing does. One default left implicit on one side is what this
+# guards against, so the limit is written in both scripts.
+for CASE in "63 0 4,-" "64 3 -,-,-,-,-"; do
+  read -r N WANT FOLDS <<< "$CASE"
+  serve FAKE_DEEP=$N FAKE_PAGES=1
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --exclude .example --out "dp$N.html"
+  if wrote "sh  depth $N, filtered" "dp$N.html"; then
+    check "sh  depth $N: the filter keeps $WANT" "$(tot "dp$N.html")" "3412,2906,$WANT,$WANT,$WANT"
+  fi
+  if [ -n "$PWSH" ]; then
+    runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Exclude .example -Out "dp${N}2.html"
+    if wrote "ps1 depth $N, filtered" "dp${N}2.html"; then
+      check "ps1 depth $N: the filter keeps $WANT" "$(tot "dp${N}2.html")" "3412,2906,$WANT,$WANT,$WANT"
+    fi
+  else skip "ps1 depth $N: the filter keeps $WANT"; fi
+  serve FAKE_DEEP=$N FAKE_DUPES=1
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out "dpf$N.html"
+  if wrote "sh  depth $N, folded" "dpf$N.html"; then
+    check "sh  depth $N: the fold gives $FOLDS" "$(payq "dpf$N.html" 3 folds)" "$FOLDS"
+  fi
+  if [ -n "$PWSH" ]; then
+    runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out "dpf${N}2.html"
+    if wrote "ps1 depth $N, folded" "dpf${N}2.html"; then
+      check "ps1 depth $N: the fold gives $FOLDS" "$(payq "dpf${N}2.html" 3 folds)" "$FOLDS"
+    fi
+  else skip "ps1 depth $N: the fold gives $FOLDS"; fi
+done
+
+echo "-- the page ceiling: a difference recorded, not closed --"
+# The two scripts read a page differently. The shell cuts each row out of the
+# raw text, so a row of any depth is one row, refused on the 64 rule and kept.
+# PowerShell parses the whole page first, and its parser stops at 1024 levels.
+# The envelope takes four (reply, result, data, row), so measured: a row of 1020
+# nested arrays is the deepest page it reads, 1021 the first it refuses. At
+# 1020 both scripts agree: the row is refused, kept by the filter, left
+# unfolded. At 1021 they do not, and the two expected outcomes below are
+# deliberately different: the shell writes a report with the row kept and
+# unfolded; PowerShell fails the search and writes NO report, which is how it
+# treats every page it cannot read, deep or truncated or broken. Changing that
+# is its own piece of work; this pins what is true today so a change shows.
+for N in 1020 1021; do
+  serve FAKE_DEEP=$N FAKE_PAGES=1
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --exclude .example --out "dpe$N.html"
+  if wrote "sh  page depth $N, filtered" "dpe$N.html"; then
+    check "sh  page depth $N: the row is refused and kept" "$(tot "dpe$N.html")" "3412,2906,3,3,3"
+  fi
+  serve FAKE_DEEP=$N FAKE_DUPES=1
+  runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out "dpef$N.html"
+  if wrote "sh  page depth $N, folded" "dpef$N.html"; then
+    check "sh  page depth $N: nothing folds" "$(payq "dpef$N.html" 3 folds)" "-,-,-,-,-"
+  fi
+done
+if [ -n "$PWSH" ]; then
+  serve FAKE_DEEP=1020 FAKE_PAGES=1
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Exclude .example -Out dpe10202.html
+  if wrote "ps1 page depth 1020, filtered" dpe10202.html; then
+    check "ps1 page depth 1020: the row is refused and kept" "$(tot dpe10202.html)" "3412,2906,3,3,3"
+  fi
+  serve FAKE_DEEP=1020 FAKE_DUPES=1
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out dpef10202.html
+  if wrote "ps1 page depth 1020, folded" dpef10202.html; then
+    check "ps1 page depth 1020: nothing folds" "$(payq dpef10202.html 3 folds)" "-,-,-,-,-"
+  fi
+  # 1021: the run must exit 1, name ConvertFrom-Json, and leave no report
+  serve FAKE_DEEP=1021 FAKE_PAGES=1
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Exclude .example -Out dpe10212.html
+  check "ps1 page depth 1021: the search fails, no report" \
+    "$LAST_RC/$(grep -q 'ConvertFrom-Json' "$LAST_LOG" && echo named || echo silent)/$([ -e "$WORK/out/dpe10212.html" ] && echo file || echo no-file)" "1/named/no-file"
+else
+  for c in "page depth 1020: the row is refused and kept" "page depth 1020: nothing folds" "page depth 1021: the search fails, no report"; do skip "ps1 $c"; done
+fi
+
 echo "-- without repeats, nothing folds --"
 serve FAKE_X=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out nf.html
