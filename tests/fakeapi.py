@@ -17,6 +17,15 @@ Behaviour is steered by environment variables so one server covers every test:
   FAKE_LONEFIRST=1  with FAKE_DUPES, the row that stands alone arrives first and
                     outscores every repeated row, so a small --rows cuts the
                     table before the folded group
+  FAKE_CREDDUPES=1  page 1 of a credential search names one account six times on
+                    six sites, one of them PLAIN and not the newest; one account
+                    twice on one site; one account twice with no site at all;
+                    and one account once
+  FAKE_CREDODD=KIND with FAKE_CREDDUPES, one odd thing about the repeated rows:
+                    xss (the first site, and the PLAIN row's site, which is the
+                    row that survives the fold, are </script><img src=x onerror=alert(1)>),
+                    sitecase (NETFLIX.COM, then https://netflix.com/path with no
+                    accessHost, so five sites not six), many (ten sites)
 """
 import json, os, sys, time, uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,6 +49,8 @@ NOTOTAL  = os.environ.get("FAKE_NOTOTAL") == "1"  # no totalResults in the statu
 RUNNING  = os.environ.get("FAKE_RUNNING") == "1"  # running stays true
 EXACT    = os.environ.get("FAKE_EXACT") == "1"    # totalResults equals the rows on hand
 ODDTOTAL = os.environ.get("FAKE_ODDTOTAL") == "1" # totalResults is not a number
+CREDDUPES = os.environ.get("FAKE_CREDDUPES") == "1"  # page 1 repeats one account across sites
+CREDODD  = os.environ.get("FAKE_CREDODD", "")      # xss | sitecase | many, see above
 LOG      = open(os.environ.get("FAKE_LOG", "/dev/null"), "a")
 
 SEARCHES = {}   # id -> {"n": ordinal, "query": ..., "source": ...}
@@ -115,11 +126,59 @@ def dupes(rows):
     out.append(lone)
     return out
 
+def cred_dupes():
+    """Page 1 of a credential search: abelle on six sites, the third of them
+    PLAIN and not the newest, so the row that stands for the group is decided
+    by the password kind and not the date; cboyd twice on one site; dnoble
+    twice with no site named anywhere; eport once."""
+    sites = ["netflix.com", "linkedin.com", "github.com", "dropbox.com", "slack.com", "zoom.us"]
+    if CREDODD == "many":
+        sites += ["adobe.com", "spotify.com", "reddit.com", "twitch.tv"]
+    out = []
+    for i, site in enumerate(sites):
+        plain = (i == 2)
+        out.append({
+            "id": "row-cred-%d" % i,
+            # one row spells the account in capitals: the key is ASCII-lowercased
+            "user": "Abelle@Larkspur.com" if i == 1 else "abelle@larkspur.com",
+            "password": "readable2" if plain else "hash%d" % i,
+            "passwordType": "PLAIN" if plain else "HASH",
+            "accessHost": site,
+            "accessUrl": "https://%s/login" % site,
+            "sourceName": "IntelX",
+            "sourceDate": 1788429683595 - (i + 10) * 86400000,
+            "detectionDate": 1788429683595 - (i + 1) * 86400000,
+        })
+    if CREDODD == "xss":
+        # on the first row, so it leads the site list; and on the PLAIN row,
+        # which stands for the group, so its raw text reaches the report
+        for i in (0, 2):
+            out[i]["accessHost"] = "</script><img src=x onerror=alert(1)>"
+            out[i]["accessUrl"] = "https://</script><img src=x onerror=alert(1)>/login"
+    elif CREDODD == "sitecase":
+        out[0]["accessHost"] = "NETFLIX.COM"
+        del out[1]["accessHost"]
+        out[1]["accessUrl"] = "https://netflix.com/path"
+    for j in range(2):
+        out.append({"id": "row-cred-one-%d" % j, "user": "cboyd@larkspur.com", "password": "hashone%d" % j,
+                    "passwordType": "HASH", "accessHost": "netflix.com", "accessUrl": "https://netflix.com/",
+                    "sourceName": "IntelX", "sourceDate": 1788429683595, "detectionDate": 1788429683595 - (j + 8) * 86400000})
+    for j in range(2):
+        out.append({"id": "row-cred-nosite-%d" % j, "user": "dnoble@larkspur.com", "password": "hashnone%d" % j,
+                    "passwordType": "HASH", "sourceName": "IntelX",
+                    "sourceDate": 1788429683595 - j * 86400000, "detectionDate": 1788429683595 - (j + 20) * 86400000})
+    out.append({"id": "row-cred-lone", "user": "eport@larkspur.com", "password": "hashlone",
+                "passwordType": "HASH", "accessHost": "zoom.us", "accessUrl": "https://zoom.us/",
+                "sourceName": "IntelX", "sourceDate": 1788429683595, "detectionDate": 1788429683595})
+    return out
+
 def body(sid, page):
     meta = SEARCHES[sid]
     rows = [row(i, page) for i in range(1, 4)]
     if DUPES and page == 1 and meta.get("source") == "signal-lake":
         rows = dupes(rows)
+    if CREDDUPES and page == 1 and meta.get("source") == "credential":
+        rows = cred_dupes()
     rows = strip_scores(rows)
     n = TOTALS[(meta["n"] - 1) % 5]
     if EXACT and meta.get("source") == "signal-lake":

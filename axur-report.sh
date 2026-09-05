@@ -764,12 +764,16 @@ fi
 # the list, so the cap counts folded rows and a site seen 200 times says so.
 # Nothing is deleted: the headline count keeps every row, and the row that
 # stands for the group carries how many it stands for and the span of dates.
+# The two credential searches fold too, on the account: one leaked account
+# used on many sites is one row, and the row names the sites.
 cat > "$TMP/fold.pl" <<'PERL'
 use strict; use warnings;
 my ($name, $file, $incomplete, $partial) = @ARGV;
 open my $fh, '<:raw', $file or exit 1; my $s = do { local $/; <$fh> }; close $fh;
-my %foldable = map { $_ => 1 } ('Phishing pages', 'Lookalike domains', 'Mail-enabled lookalikes');
-if (!$foldable{$name}) { print $s; exit 0 }
+my %bysite    = map { $_ => 1 } ('Phishing pages', 'Lookalike domains', 'Mail-enabled lookalikes');
+my %byaccount = map { $_ => 1 } ('Leaked credentials', 'In plaintext');
+if (!$bysite{$name} && !$byaccount{$name}) { print $s; exit 0 }
+my $cred = $byaccount{$name} ? 1 : 0;
 
 # The rows sit in the first "data":[ ... ] array. Walk it object by object,
 # string and escape aware, so a brace inside a value cannot fool the depth count.
@@ -850,7 +854,8 @@ sub jvalue {
 # when the row is not well-formed JSON, or when a field the fold reads appears
 # twice: this script would take the first and PowerShell's parser the last,
 # and neither is more than a guess. A row that does not parse is left alone.
-my %READS = map { $_ => 1 } ('host', 'domain', 'reference', 'riskScore', 'detectionDate');
+my %READS = map { $_ => 1 } ('host', 'domain', 'reference', 'riskScore', 'detectionDate',
+                             'user', 'passwordType', 'accessHost', 'accessUrl', 'url');
 sub fields {
   my (%f, %seen);
   pos($_[0]) = 0;
@@ -895,9 +900,62 @@ sub keyof {
   }
   return '';
 }
+# The credential key: the account, lowercased in ASCII only. No account, or
+# an empty one, is never folded.
+sub userof {
+  my ($f) = @_; my $x = $f->{'user'};
+  return '' unless $x && $x->[0] eq 's' && length $x->[1];
+  (my $u = $x->[1]) =~ tr/A-Z/a-z/;
+  return $u;
+}
+# The site of a credential row. This rule is shared word for word with
+# Get-Site in axur-report.ps1; change one and change the other:
+#   - take the first non-empty of accessHost, accessUrl, url
+#   - strip any scheme, then cut at the first of / ? #
+#   - ASCII-lowercase it
+#   - an empty result is NOT a site, and never counts
+#   - two sites are the same only if the resulting text is byte-for-byte equal
+sub siteof {
+  my ($f) = @_;
+  for my $k ('accessHost', 'accessUrl', 'url') {
+    my $x = $f->{$k}; next unless $x && $x->[0] eq 's' && length $x->[1];
+    my $h = $x->[1];
+    $h =~ s{^[A-Za-z][A-Za-z0-9+.\-]*://}{};
+    $h =~ s{[/?#].*}{}s;
+    $h =~ tr/A-Z/a-z/;
+    return $h;
+  }
+  return '';
+}
+# 1 when passwordType reads PLAIN, matched on its ASCII letters only.
+sub isplain {
+  my ($f) = @_; my $x = $f->{'passwordType'};
+  return 0 unless $x && $x->[0] eq 's';
+  (my $t = $x->[1]) =~ tr/a-z/A-Z/;
+  return $t eq 'PLAIN' ? 1 : 0;
+}
+# One JSON string, from UTF-8 bytes jstring already checked. Quotes,
+# backslashes and control characters are escaped; anything outside ASCII goes
+# out as \uXXXX, a pair for a character past U+FFFF. "/" is written "\/", so
+# "</" can never appear: the report rewrites "</" to "<\/" in every reply
+# because it would end the script block the payload sits in, and jstring
+# decoded that back to "</" on the way in. This puts the protection back.
+sub jencode {
+  my ($b) = @_; utf8::decode($b); my $out = '"';
+  for my $ch (split //, $b) {
+    my $cp = ord $ch;
+    if ($ch eq '"') { $out .= '\\"' } elsif ($ch eq '\\') { $out .= '\\\\' } elsif ($ch eq '/') { $out .= '\\/' }
+    elsif ($cp < 0x20 || $cp == 0x7f) { $out .= sprintf '\\u%04x', $cp }
+    elsif ($cp < 0x80) { $out .= $ch }
+    elsif ($cp < 0x10000) { $out .= sprintf '\\u%04x', $cp }
+    else { $cp -= 0x10000; $out .= sprintf '\\u%04x\\u%04x', 0xD800 + ($cp >> 10), 0xDC00 + ($cp & 0x3ff) }
+  }
+  return $out . '"';
+}
 # The row that stands for the group: highest score, then newest date, then
 # the one seen first. A missing score sits below every score, and a missing
-# date before every date.
+# date before every date. A credential row has no score; a readable password
+# is its score, 1 against 0, so a PLAIN row beats one that is not.
 sub better {
   my ($sc, $d, $bs, $bd) = @_;
   return 1 if defined $sc && !defined $bs; return 0 if !defined $sc && defined $bs;
@@ -913,7 +971,7 @@ my $pulled = scalar @rows;
 my (@slots, %group);
 for my $r (@rows) {
   my $f = fields($r);
-  my $k = $f ? keyof($f) : '';
+  my $k = $f ? ($cred ? userof($f) : keyof($f)) : '';
   if ($k eq '') { push @slots, [$r]; next }
   if (!$group{$k}) { $group{$k} = []; push @slots, $k }
   push @{$group{$k}}, [$r, $f];
@@ -923,14 +981,21 @@ for my $sl (@slots) {
   if (ref $sl) { push @out, $sl->[0]; next }
   my $g = $group{$sl};
   if (@$g < 2) { push @out, $g->[0][0]; next }
-  my ($best, $bs, $bd, $first, $last);
+  my ($best, $bs, $bd, $first, $last, @sites, %seen);
   for my $e (@$g) {
-    my $sc = numv($e->[1], 'riskScore'); my $d = numv($e->[1], 'detectionDate');
+    my $sc = $cred ? isplain($e->[1]) : numv($e->[1], 'riskScore'); my $d = numv($e->[1], 'detectionDate');
     if (defined $d) { $first = $d if !defined $first || $d < $first; $last = $d if !defined $last || $d > $last }
     if (!defined $best || better($sc, $d, $bs, $bd)) { ($best, $bs, $bd) = ($e->[0], $sc, $d) }
+    # the distinct sites, in the order the rows arrived
+    if ($cred) { my $st = siteof($e->[1]); push @sites, $st if $st ne '' && !$seen{$st}++ }
   }
   my $mark = ',"foldCount":' . scalar(@$g);
   $mark .= sprintf(',"foldFirst":%.0f,"foldLast":%.0f', $first, $last) if defined $first;
+  # foldSites holds the first 8; foldSiteCount is the true count of them all
+  if (@sites) {
+    $mark .= ',"foldSites":[' . join(',', map { jencode($_) } @sites[0 .. ($#sites < 7 ? $#sites : 7)]) . ']';
+    $mark .= ',"foldSiteCount":' . scalar(@sites);
+  }
   (my $row = $best) =~ s/\}\s*\z/$mark}/;
   push @out, $row;
 }
@@ -1414,7 +1479,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   // filtering caveat on the cover is a different thing; this sits beside it.
   if (totals.some(function(t){ return Number(t.foldPartial) === 1; })) {
     var foot = document.querySelector('.cover .foot');
-    if (foot) foot.appendChild(document.createTextNode(' A site seen more than once is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
+    if (foot) foot.appendChild(document.createTextNode(' A repeated site or account is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
   }
   // One search per block. Parsing them together meant a single bad reply threw
   // once and blanked all five tables, and the empty result was cached, so a
@@ -1571,7 +1636,18 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
     var a = dateOf(r.foldFirst), b = dateOf(r.foldLast), when = '';
     if (a && b) when = fmtDate(a) === fmtDate(b) ? fmtDate(a) : fmtDate(a) + ' to ' + fmtDate(b);
     else if (a || b) when = fmtDate(a || b);
-    return '<span class="sec fold">' + c + ' times' + (when ? ', ' + when : '') + '</span>';
+    var note = '<span class="sec fold">' + c + ' times' + (when ? ', ' + when : '') + '</span>';
+    // "6 sites: netflix.com, linkedin.com, and 4 more" under a folded account.
+    // foldSites holds the first 8 sites; foldSiteCount is the count of them
+    // all, so "and N more" is counted from it, never from the list's length.
+    // Every name passes through esc(): it is text Axur sent, not markup.
+    var sc = Number(r.foldSiteCount), sl = Array.isArray(r.foldSites) ? r.foldSites.filter(function(x){ return typeof x === 'string' && x !== ''; }) : [];
+    if (sc >= 1 && sl.length) {
+      var shown = sl.slice(0, 2).map(esc), more = sc - shown.length;
+      note += '<span class="sec fold">' + sc + (sc === 1 ? ' site: ' : ' sites: ') + shown.join(', ') +
+              (more > 0 ? ', and ' + more + ' more' : '') + '</span>';
+    }
+    return note;
   }
   // how many records the rows on show stand for
   function standFor(rs){ return rs.reduce(function(a, r){ var c = Number(r && r.foldCount); return a + (c >= 2 ? c : 1); }, 0); }
@@ -1638,7 +1714,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
                  'Mail-enabled lookalikes':'Lookalikes set up to receive mail' };
   function heading(name){ return TITLES[name] || name; }
   var MEANS = {
-    'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
+    'Leaked credentials':'One row per exposed account, however many times it leaked. The row says how many times and across how many sites. "Password used on" is the site the password was for, which is often not your own, and is the site of the record the row stands for.',
     'In plaintext':'The accounts from section 01 whose password was stored in readable form. These are the ones to reset first. They are not listed again here: section 01 puts them at the top of its table.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
     'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, and many are never used. Your own defensive registrations appear here too.',
@@ -1655,7 +1731,7 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   function sectionOf(name){ for (var i = 0; i < totals.length; i++) { if (totals[i].name === name) return i + 1; } return 0; }
   var CARDS = [
     { icon:'lock', title:'Exposed credentials', go:sectionOf('Leaked credentials'),
-      big:n('Leaked credentials'), lab:'leaked records tied to your domain. One account can appear more than once', sev:'a',
+      big:n('Leaked credentials'), lab:'leaked records tied to your domain. An account that leaked more than once is counted every time, and shown as one row', sev:'a',
       sub:n('In plaintext'), subLab:'of them with the password in readable form, usable today', subSev:'r',
       desc:'Accounts on ' + esc(DOMAIN) + ' whose passwords have already been exposed somewhere outside your company.',
       why:'They reach Axur from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware. A row does not always say which.' },
@@ -1704,6 +1780,8 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
   // when the table is truncated it is the worst rows that survive. Below the
   // break the rest run newest first, by the day Axur found them.
   function riskOf(r){ var v = Number(r && r.riskScore); return (r && r.riskScore !== undefined && r.riskScore !== null && r.riskScore !== '' && !isNaN(v)) ? v : null; }
+  // The two searches that fold by account rather than by site.
+  var CRED = {'Leaked credentials': 1, 'In plaintext': 1};
   function newestFirst(list){
     return list.slice().sort(function(a, b){
       var x = dateOf(a && a.detectionDate), y = dateOf(b && b.detectionDate);
@@ -1855,7 +1933,10 @@ cat <<'HTMLTAIL' | sed "s/ROWSVALUE/$ROWS/"
           line = rs.length + ' rows, standing for ' +
             (total === null ? show(stand) + ' records; the total count was not available.'
                             : (stand < total ? show(stand) + ' of ' + show(total) + ' records.' : 'all ' + show(total) + ' records.')) +
-            ' A site seen more than once is one row, and the row says how many times.';
+            // The credential searches fold by account, the rest by site, so the
+            // sentence has to name the thing this table actually folded.
+            (CRED[t.name] ? ' An account seen more than once is one row, and the row says how many times and where.'
+                          : ' A site seen more than once is one row, and the row says how many times.');
         } else {
           line = total === null ? 'Showing ' + rs.length + ' records; the total count was not available.'
                                 : (rs.length < total ? 'The first ' + rs.length + ' of ' + show(total) + ' records.' : 'All ' + show(total) + ' records.');

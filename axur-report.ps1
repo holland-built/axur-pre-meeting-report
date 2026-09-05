@@ -293,6 +293,14 @@ if ($NoLogo) {
 }
 
 $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
+# The searches that fold: the three above on the site, these two on the account.
+# Which searches fold by what. $filtered happens to hold the same three names
+# as $bySite today, but it is the list the score and exclusion filters apply
+# to, which is a different question; naming it here keeps a change to one from
+# silently changing the other.
+$bySite    = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
+$byAccount = @("Leaked credentials", "In plaintext")
+$foldable  = $bySite + $byAccount
 # lowercased once here, because Test-Keep compares them against every field of
 # every row and $p.ToLower() inside that loop redid the work thousands of times
 $patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
@@ -386,6 +394,36 @@ function Get-FoldKey($row) {
   }
   return ''
 }
+# The credential key: the account, lowercased in ASCII only. No account, or
+# an empty one, is never folded.
+function Get-UserKey($row) {
+  $v = Get-Prop $row 'user'
+  if ($v -isnot [string] -or $v -eq '') { return '' }
+  return (ConvertTo-AsciiLower $v)
+}
+# The site of a credential row. This rule is shared word for word with siteof
+# in fold.pl, inside axur-report.sh; change one and change the other:
+#   - take the first non-empty of accessHost, accessUrl, url
+#   - strip any scheme, then cut at the first of / ? #
+#   - ASCII-lowercase it
+#   - an empty result is NOT a site, and never counts
+#   - two sites are the same only if the resulting text is byte-for-byte equal
+function Get-Site($row) {
+  foreach ($f in @('accessHost', 'accessUrl', 'url')) {
+    $v = Get-Prop $row $f
+    if ($v -isnot [string] -or $v -eq '') { continue }
+    $k = $v -replace '^[A-Za-z][A-Za-z0-9+.-]*://', '' -replace '(?s)[/?#].*', ''
+    return (ConvertTo-AsciiLower $k)
+  }
+  return ''
+}
+# 1 when passwordType reads PLAIN, matched on its ASCII letters only; else 0.
+function Get-Plain($row) {
+  $v = Get-Prop $row 'passwordType'
+  if ($v -isnot [string]) { return 0 }
+  if ((ConvertTo-AsciiLower $v) -ceq 'plain') { return 1 }
+  return 0
+}
 # A number, from a number or from a string written the way JSON writes a
 # number; $null otherwise. .NET would also take "NaN" and "Infinity", which
 # fold.pl's grammar does not, and NaN never loses a comparison.
@@ -406,7 +444,8 @@ function Get-Num($v) {
 # token. A row that names a field the fold reads twice is bad as well: this
 # parser keeps the last value and fold.pl the first, so the two would guess
 # differently. One $true or $false per row, in order.
-$foldReads = @('host', 'domain', 'reference', 'riskScore', 'detectionDate')
+$foldReads = @('host', 'domain', 'reference', 'riskScore', 'detectionDate',
+               'user', 'passwordType', 'accessHost', 'accessUrl', 'url')
 function Test-JsonString($tok) {
   if ($tok -match '[\x00-\x1f]') { return $false }
   $high = $false; $highEnd = -1
@@ -463,7 +502,8 @@ function Set-Unfoldable($rows, $text) {
 }
 # The row that stands for the group: highest score, then newest date, then
 # the one seen first. A missing score sits below every score, and a missing
-# date before every date.
+# date before every date. A credential row has no score; a readable password
+# is its score, 1 against 0, so a PLAIN row beats one that is not.
 function Test-Better($sc, $d, $bestSc, $bestD) {
   if ($null -ne $sc -and $null -eq $bestSc) { return $true }
   if ($null -eq $sc -and $null -ne $bestSc) { return $false }
@@ -474,7 +514,8 @@ function Test-Better($sc, $d, $bestSc, $bestD) {
   return $false
 }
 function Merge-Rows($name, $found) {
-  if ($filtered -notcontains $name) { return @($found) }
+  if ($foldable -notcontains $name) { return @($found) }
+  $cred = ($byAccount -contains $name)
   # Every group keeps the place of its first row, so the order the API chose
   # survives for the rows that are not folded.
   $slots = New-Object System.Collections.ArrayList
@@ -482,7 +523,7 @@ function Merge-Rows($name, $found) {
   # rule lowercases ASCII only, so a key in another script must stay itself.
   $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
   foreach ($row in $found) {
-    $k = if (Get-Prop $row '__unfoldable') { '' } else { Get-FoldKey $row }
+    $k = if (Get-Prop $row '__unfoldable') { '' } elseif ($cred) { Get-UserKey $row } else { Get-FoldKey $row }
     if ($row -is [psobject]) { $row.PSObject.Properties.Remove('__unfoldable') }
     if ($k -eq '') { [void]$slots.Add(@{ row = $row }); continue }
     if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList; [void]$slots.Add(@{ key = $k }) }
@@ -494,19 +535,31 @@ function Merge-Rows($name, $found) {
     $g = $groups[$s.key]
     if ($g.Count -lt 2) { $out += $g[0]; continue }
     $best = $null; $bestSc = $null; $bestD = $null; $first = $null; $last = $null
+    # The distinct sites in the order the rows arrived: an ordered list, with
+    # an ordinal set beside it saying what is already in it. A hashtable or a
+    # dictionary promises no order when it is walked.
+    $sites = New-Object System.Collections.ArrayList
+    $siteSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     foreach ($r in $g) {
-      $sc = Get-Num (Get-Prop $r 'riskScore'); $d = Get-Num (Get-Prop $r 'detectionDate')
+      $sc = if ($cred) { Get-Plain $r } else { Get-Num (Get-Prop $r 'riskScore') }
+      $d = Get-Num (Get-Prop $r 'detectionDate')
       if ($null -ne $d) {
         if ($null -eq $first -or $d -lt $first) { $first = $d }
         if ($null -eq $last -or $d -gt $last) { $last = $d }
       }
       if ($null -eq $best -or (Test-Better $sc $d $bestSc $bestD)) { $best = $r; $bestSc = $sc; $bestD = $d }
+      if ($cred) { $st = Get-Site $r; if ($st -cne '' -and $siteSeen.Add($st)) { [void]$sites.Add($st) } }
     }
     # foldCount is always 2 or more; a row standing for itself carries no markers
     $best | Add-Member -NotePropertyName foldCount -NotePropertyValue ([int]$g.Count) -Force
     if ($null -ne $first) {
       $best | Add-Member -NotePropertyName foldFirst -NotePropertyValue ([long]$first) -Force
       $best | Add-Member -NotePropertyName foldLast -NotePropertyValue ([long]$last) -Force
+    }
+    # foldSites holds the first 8; foldSiteCount is the true count of them all
+    if ($sites.Count) {
+      $best | Add-Member -NotePropertyName foldSites -NotePropertyValue ([string[]]@($sites | Select-Object -First 8)) -Force
+      $best | Add-Member -NotePropertyName foldSiteCount -NotePropertyValue ([int]$sites.Count) -Force
     }
     $out += $best
   }
@@ -629,7 +682,7 @@ function Complete-Search($job) {
   # Select-Object -First holding an array, and the run died on the first search
   # with "Cannot convert 'System.Object[]' to the type 'System.Int32'".
   $found = @(); if ($doc) { $found = @($doc.result.data) }
-  if ($filtered -contains $name) { Set-Unfoldable $found $raw }
+  if ($foldable -contains $name) { Set-Unfoldable $found $raw }
 
   # A filtered number is only honest if it was counted over every row, so when a
   # filter is on we walk the pages. The API ignores page-size parameters, so
@@ -669,7 +722,7 @@ function Complete-Search($job) {
   }
 
   $examined = $null
-  if ($filtered -contains $name) { $examined = $found.Count }
+  if ($foldable -contains $name) { $examined = $found.Count }
   if ($anyFilter -and $filtered -contains $name -and $found.Count) {
     $kept = @($found | Where-Object { Test-Keep $_ })
     Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
@@ -684,7 +737,7 @@ function Complete-Search($job) {
   # page walk stopped short, or fewer rows were examined than Axur reported -
   # which also covers a walk that ended because a page came back twice.
   $pulled = $null; $folded = $null; $foldPartial = $false
-  if ($filtered -contains $name) {
+  if ($foldable -contains $name) {
     $pulled = $found.Count
     $found = @(Merge-Rows $name $found)
     $folded = $found.Count
@@ -1055,7 +1108,7 @@ $tail = @'
   // filtering caveat on the cover is a different thing; this sits beside it.
   if (totals.some(function(t){ return Number(t.foldPartial) === 1; })) {
     var foot = document.querySelector('.cover .foot');
-    if (foot) foot.appendChild(document.createTextNode(' A site seen more than once is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
+    if (foot) foot.appendChild(document.createTextNode(' A repeated site or account is shown as one row; where only part of a result was pulled, the "times" count and the dates cover that part only.'));
   }
   // One search per block. Parsing them together meant a single bad reply threw
   // once and blanked all five tables, and the empty result was cached, so a
@@ -1212,7 +1265,18 @@ $tail = @'
     var a = dateOf(r.foldFirst), b = dateOf(r.foldLast), when = '';
     if (a && b) when = fmtDate(a) === fmtDate(b) ? fmtDate(a) : fmtDate(a) + ' to ' + fmtDate(b);
     else if (a || b) when = fmtDate(a || b);
-    return '<span class="sec fold">' + c + ' times' + (when ? ', ' + when : '') + '</span>';
+    var note = '<span class="sec fold">' + c + ' times' + (when ? ', ' + when : '') + '</span>';
+    // "6 sites: netflix.com, linkedin.com, and 4 more" under a folded account.
+    // foldSites holds the first 8 sites; foldSiteCount is the count of them
+    // all, so "and N more" is counted from it, never from the list's length.
+    // Every name passes through esc(): it is text Axur sent, not markup.
+    var sc = Number(r.foldSiteCount), sl = Array.isArray(r.foldSites) ? r.foldSites.filter(function(x){ return typeof x === 'string' && x !== ''; }) : [];
+    if (sc >= 1 && sl.length) {
+      var shown = sl.slice(0, 2).map(esc), more = sc - shown.length;
+      note += '<span class="sec fold">' + sc + (sc === 1 ? ' site: ' : ' sites: ') + shown.join(', ') +
+              (more > 0 ? ', and ' + more + ' more' : '') + '</span>';
+    }
+    return note;
   }
   // how many records the rows on show stand for
   function standFor(rs){ return rs.reduce(function(a, r){ var c = Number(r && r.foldCount); return a + (c >= 2 ? c : 1); }, 0); }
@@ -1279,7 +1343,7 @@ $tail = @'
                  'Mail-enabled lookalikes':'Lookalikes set up to receive mail' };
   function heading(name){ return TITLES[name] || name; }
   var MEANS = {
-    'Leaked credentials':'One row per exposed account. "Password used on" is the site the password was for, which is often not your own. An account appears more than once if it leaked more than once.',
+    'Leaked credentials':'One row per exposed account, however many times it leaked. The row says how many times and across how many sites. "Password used on" is the site the password was for, which is often not your own, and is the site of the record the row stands for.',
     'In plaintext':'The accounts from section 01 whose password was stored in readable form. These are the ones to reset first. They are not listed again here: section 01 puts them at the top of its table.',
     'Phishing pages':'Pages Axur is highly confident are impersonating this brand. Risk runs from 0 to 100 and combines how convincing the page is with what it asks for. Some pages will already be offline; the last column shows when each was seen.',
     'Lookalike domains':'Domain names one character away from yours that somebody has registered. Registration alone is not proof of intent, and many are never used. Your own defensive registrations appear here too.',
@@ -1296,7 +1360,7 @@ $tail = @'
   function sectionOf(name){ for (var i = 0; i < totals.length; i++) { if (totals[i].name === name) return i + 1; } return 0; }
   var CARDS = [
     { icon:'lock', title:'Exposed credentials', go:sectionOf('Leaked credentials'),
-      big:n('Leaked credentials'), lab:'leaked records tied to your domain. One account can appear more than once', sev:'a',
+      big:n('Leaked credentials'), lab:'leaked records tied to your domain. An account that leaked more than once is counted every time, and shown as one row', sev:'a',
       sub:n('In plaintext'), subLab:'of them with the password in readable form, usable today', subSev:'r',
       desc:'Accounts on ' + esc(DOMAIN) + ' whose passwords have already been exposed somewhere outside your company.',
       why:'They reach Axur from three places: company breaches, dumps traded on criminal forums, and staff or customer computers infected with password-stealing malware. A row does not always say which.' },
@@ -1345,6 +1409,8 @@ $tail = @'
   // when the table is truncated it is the worst rows that survive. Below the
   // break the rest run newest first, by the day Axur found them.
   function riskOf(r){ var v = Number(r && r.riskScore); return (r && r.riskScore !== undefined && r.riskScore !== null && r.riskScore !== '' && !isNaN(v)) ? v : null; }
+  // The two searches that fold by account rather than by site.
+  var CRED = {'Leaked credentials': 1, 'In plaintext': 1};
   function newestFirst(list){
     return list.slice().sort(function(a, b){
       var x = dateOf(a && a.detectionDate), y = dateOf(b && b.detectionDate);
@@ -1496,7 +1562,10 @@ $tail = @'
           line = rs.length + ' rows, standing for ' +
             (total === null ? show(stand) + ' records; the total count was not available.'
                             : (stand < total ? show(stand) + ' of ' + show(total) + ' records.' : 'all ' + show(total) + ' records.')) +
-            ' A site seen more than once is one row, and the row says how many times.';
+            // The credential searches fold by account, the rest by site, so the
+            // sentence has to name the thing this table actually folded.
+            (CRED[t.name] ? ' An account seen more than once is one row, and the row says how many times and where.'
+                          : ' A site seen more than once is one row, and the row says how many times.');
         } else {
           line = total === null ? 'Showing ' + rs.length + ' records; the total count was not available.'
                                 : (rs.length < total ? 'The first ' + rs.length + ' of ' + show(total) + ' records.' : 'All ' + show(total) + ' records.');

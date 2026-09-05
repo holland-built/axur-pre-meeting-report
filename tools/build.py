@@ -312,6 +312,14 @@ if ($NoLogo) {
 }
 
 $filtered = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
+# The searches that fold: the three above on the site, these two on the account.
+# Which searches fold by what. $filtered happens to hold the same three names
+# as $bySite today, but it is the list the score and exclusion filters apply
+# to, which is a different question; naming it here keeps a change to one from
+# silently changing the other.
+$bySite    = @("Phishing pages", "Lookalike domains", "Mail-enabled lookalikes")
+$byAccount = @("Leaked credentials", "In plaintext")
+$foldable  = $bySite + $byAccount
 # lowercased once here, because Test-Keep compares them against every field of
 # every row and $p.ToLower() inside that loop redid the work thousands of times
 $patterns = @($Exclude -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
@@ -405,6 +413,36 @@ function Get-FoldKey($row) {
   }
   return ''
 }
+# The credential key: the account, lowercased in ASCII only. No account, or
+# an empty one, is never folded.
+function Get-UserKey($row) {
+  $v = Get-Prop $row 'user'
+  if ($v -isnot [string] -or $v -eq '') { return '' }
+  return (ConvertTo-AsciiLower $v)
+}
+# The site of a credential row. This rule is shared word for word with siteof
+# in fold.pl, inside axur-report.sh; change one and change the other:
+#   - take the first non-empty of accessHost, accessUrl, url
+#   - strip any scheme, then cut at the first of / ? #
+#   - ASCII-lowercase it
+#   - an empty result is NOT a site, and never counts
+#   - two sites are the same only if the resulting text is byte-for-byte equal
+function Get-Site($row) {
+  foreach ($f in @('accessHost', 'accessUrl', 'url')) {
+    $v = Get-Prop $row $f
+    if ($v -isnot [string] -or $v -eq '') { continue }
+    $k = $v -replace '^[A-Za-z][A-Za-z0-9+.-]*://', '' -replace '(?s)[/?#].*', ''
+    return (ConvertTo-AsciiLower $k)
+  }
+  return ''
+}
+# 1 when passwordType reads PLAIN, matched on its ASCII letters only; else 0.
+function Get-Plain($row) {
+  $v = Get-Prop $row 'passwordType'
+  if ($v -isnot [string]) { return 0 }
+  if ((ConvertTo-AsciiLower $v) -ceq 'plain') { return 1 }
+  return 0
+}
 # A number, from a number or from a string written the way JSON writes a
 # number; $null otherwise. .NET would also take "NaN" and "Infinity", which
 # fold.pl's grammar does not, and NaN never loses a comparison.
@@ -425,7 +463,8 @@ function Get-Num($v) {
 # token. A row that names a field the fold reads twice is bad as well: this
 # parser keeps the last value and fold.pl the first, so the two would guess
 # differently. One $true or $false per row, in order.
-$foldReads = @('host', 'domain', 'reference', 'riskScore', 'detectionDate')
+$foldReads = @('host', 'domain', 'reference', 'riskScore', 'detectionDate',
+               'user', 'passwordType', 'accessHost', 'accessUrl', 'url')
 function Test-JsonString($tok) {
   if ($tok -match '[\x00-\x1f]') { return $false }
   $high = $false; $highEnd = -1
@@ -482,7 +521,8 @@ function Set-Unfoldable($rows, $text) {
 }
 # The row that stands for the group: highest score, then newest date, then
 # the one seen first. A missing score sits below every score, and a missing
-# date before every date.
+# date before every date. A credential row has no score; a readable password
+# is its score, 1 against 0, so a PLAIN row beats one that is not.
 function Test-Better($sc, $d, $bestSc, $bestD) {
   if ($null -ne $sc -and $null -eq $bestSc) { return $true }
   if ($null -eq $sc -and $null -ne $bestSc) { return $false }
@@ -493,7 +533,8 @@ function Test-Better($sc, $d, $bestSc, $bestD) {
   return $false
 }
 function Merge-Rows($name, $found) {
-  if ($filtered -notcontains $name) { return @($found) }
+  if ($foldable -notcontains $name) { return @($found) }
+  $cred = ($byAccount -contains $name)
   # Every group keeps the place of its first row, so the order the API chose
   # survives for the rows that are not folded.
   $slots = New-Object System.Collections.ArrayList
@@ -501,7 +542,7 @@ function Merge-Rows($name, $found) {
   # rule lowercases ASCII only, so a key in another script must stay itself.
   $groups = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
   foreach ($row in $found) {
-    $k = if (Get-Prop $row '__unfoldable') { '' } else { Get-FoldKey $row }
+    $k = if (Get-Prop $row '__unfoldable') { '' } elseif ($cred) { Get-UserKey $row } else { Get-FoldKey $row }
     if ($row -is [psobject]) { $row.PSObject.Properties.Remove('__unfoldable') }
     if ($k -eq '') { [void]$slots.Add(@{ row = $row }); continue }
     if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList; [void]$slots.Add(@{ key = $k }) }
@@ -513,19 +554,31 @@ function Merge-Rows($name, $found) {
     $g = $groups[$s.key]
     if ($g.Count -lt 2) { $out += $g[0]; continue }
     $best = $null; $bestSc = $null; $bestD = $null; $first = $null; $last = $null
+    # The distinct sites in the order the rows arrived: an ordered list, with
+    # an ordinal set beside it saying what is already in it. A hashtable or a
+    # dictionary promises no order when it is walked.
+    $sites = New-Object System.Collections.ArrayList
+    $siteSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     foreach ($r in $g) {
-      $sc = Get-Num (Get-Prop $r 'riskScore'); $d = Get-Num (Get-Prop $r 'detectionDate')
+      $sc = if ($cred) { Get-Plain $r } else { Get-Num (Get-Prop $r 'riskScore') }
+      $d = Get-Num (Get-Prop $r 'detectionDate')
       if ($null -ne $d) {
         if ($null -eq $first -or $d -lt $first) { $first = $d }
         if ($null -eq $last -or $d -gt $last) { $last = $d }
       }
       if ($null -eq $best -or (Test-Better $sc $d $bestSc $bestD)) { $best = $r; $bestSc = $sc; $bestD = $d }
+      if ($cred) { $st = Get-Site $r; if ($st -cne '' -and $siteSeen.Add($st)) { [void]$sites.Add($st) } }
     }
     # foldCount is always 2 or more; a row standing for itself carries no markers
     $best | Add-Member -NotePropertyName foldCount -NotePropertyValue ([int]$g.Count) -Force
     if ($null -ne $first) {
       $best | Add-Member -NotePropertyName foldFirst -NotePropertyValue ([long]$first) -Force
       $best | Add-Member -NotePropertyName foldLast -NotePropertyValue ([long]$last) -Force
+    }
+    # foldSites holds the first 8; foldSiteCount is the true count of them all
+    if ($sites.Count) {
+      $best | Add-Member -NotePropertyName foldSites -NotePropertyValue ([string[]]@($sites | Select-Object -First 8)) -Force
+      $best | Add-Member -NotePropertyName foldSiteCount -NotePropertyValue ([int]$sites.Count) -Force
     }
     $out += $best
   }
@@ -648,7 +701,7 @@ function Complete-Search($job) {
   # Select-Object -First holding an array, and the run died on the first search
   # with "Cannot convert 'System.Object[]' to the type 'System.Int32'".
   $found = @(); if ($doc) { $found = @($doc.result.data) }
-  if ($filtered -contains $name) { Set-Unfoldable $found $raw }
+  if ($foldable -contains $name) { Set-Unfoldable $found $raw }
 
   # A filtered number is only honest if it was counted over every row, so when a
   # filter is on we walk the pages. The API ignores page-size parameters, so
@@ -688,7 +741,7 @@ function Complete-Search($job) {
   }
 
   $examined = $null
-  if ($filtered -contains $name) { $examined = $found.Count }
+  if ($foldable -contains $name) { $examined = $found.Count }
   if ($anyFilter -and $filtered -contains $name -and $found.Count) {
     $kept = @($found | Where-Object { Test-Keep $_ })
     Write-Host ("  {0,-26} filtered count: $($kept.Count)" -f $name)
@@ -703,7 +756,7 @@ function Complete-Search($job) {
   # page walk stopped short, or fewer rows were examined than Axur reported -
   # which also covers a walk that ended because a page came back twice.
   $pulled = $null; $folded = $null; $foldPartial = $false
-  if ($filtered -contains $name) {
+  if ($foldable -contains $name) {
     $pulled = $found.Count
     $found = @(Merge-Rows $name $found)
     $folded = $found.Count

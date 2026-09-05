@@ -212,6 +212,9 @@ print(','.join('null' if t.get(f,'-') is None else str(t.get(f,'-')) for t in js
 #   folds  each row's foldCount, or - for a row standing for itself
 #   span   asc when a folded row's foldFirst is earlier than its foldLast
 #   risk   each row's riskScore, or - when it has none
+#   sites  each row's foldSiteCount/stored:site|site..., nosite for a folded
+#          row without them, or - for a row standing for itself
+#   pw     each row's password
 payq() { # payq FILE N QUESTION
   readable "$1" || return
   python3 -c "
@@ -223,7 +226,22 @@ if q=='rows': print(len(rs))
 elif q=='risk': print(','.join(str(r.get('riskScore','-')) for r in rs))
 elif q=='folds': print(','.join(str(r.get('foldCount','-')) for r in rs))
 elif q=='span': print(','.join(('asc' if r['foldFirst']<r['foldLast'] else 'flat') if 'foldFirst' in r else '-' for r in rs))
+elif q=='sites': print(','.join(('%s/%d:%s'%(r.get('foldSiteCount'),len(r['foldSites']),'|'.join(r['foldSites']))) if 'foldSites' in r else ('nosite' if 'foldCount' in r else '-') for r in rs))
+elif q=='pw': print(','.join(str(r.get('password','-')) for r in rs))
 else: print('no-such-question')" "$WORK/out/$1" "$2" "$3"
+}
+# How many of the five payload blocks parse as JSON. A block cut short by an
+# unescaped </script> inside a value does not.
+blocks() { # blocks FILE
+  readable "$1" || return
+  python3 -c "
+import json,sys
+s=open(sys.argv[1]).read(); ok=0
+for n in range(1,6):
+    i=s.find('id=\"payload-%d\"'%n); j=s.find('>',i)+1; k=s.find('</script>',j)
+    try: json.loads(s[j:k], strict=False); ok+=1
+    except Exception: pass
+print(ok)" "$WORK/out/$1"
 }
 # The query the first search actually ran.
 qy() {
@@ -264,6 +282,11 @@ dom() { # dom FILE -> renders $WORK/out/FILE into $WORK/dom/FILE
 #   fold   yes or no per row: does its first cell carry the fold note
 #   note   how many partial-fold notes sit above the table
 #   says   the text of that note
+#   sitenote  per row: the site sentence in its first cell, none when the row
+#          is folded without one, - when the row is not folded
+#   pw     per row: the password shown
+#   cnt    the count line in the section heading
+#   more   the text under the table, or in place of it
 domq() { # domq FILE SECTION QUESTION
   readable "$1" || return
   [ -s "$WORK/dom/$1" ] || { echo no-dom; return 1; }
@@ -277,6 +300,10 @@ if not m: print("no-section"); sys.exit()
 if q == "note": print(len(re.findall(r"class=\"foldnote\"", m.group(1)))); sys.exit()
 if q == "says":
     n = re.search(r"class=\"foldnote\">(.*?)</p>", m.group(1), re.S); print(n.group(1) if n else "no-note"); sys.exit()
+if q == "cnt":
+    n = re.search(r"class=\"cnt\"[^>]*>(.*?)</span>", m.group(1), re.S); print(n.group(1) if n else "no-cnt"); sys.exit()
+if q == "more":
+    n = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S); print(n.group(1) if n else "no-more"); sys.exit()
 m2 = re.search(r"<tbody>(.*?)</tbody>", m.group(1), re.S)
 if not m2: print("no-table"); sys.exit()
 above, below, brk, seen = [], [], 0, False
@@ -290,8 +317,26 @@ if q == "place":
 if q == "rows": print(len(above) + len(below)); sys.exit()
 if q == "hi": print(sum(1 for t in above + below if t.lstrip().startswith("class=\"hi\""))); sys.exit()
 if q == "fold": print(",".join("yes" if "class=\"sec fold\"" in t else "no" for t in above + below)); sys.exit()
+if q == "sitenote":
+    def note(t):
+        ns = re.findall(r"class=\"sec fold\">([^<]*)</span>", t)
+        if not ns: return "-"
+        st = [x for x in ns if " site" in x]
+        return st[0] if st else "none"
+    print(",".join(note(t) for t in above + below)); sys.exit()
+if q == "pw": print(",".join((re.search(r"class=\"secret\">([^<]*)<", t) or [None, "-"])[1] for t in above + below)); sys.exit()
 # The line under the table. "standing for" is the folded wording; without it
 # the section is counting raw records as though they were rows.
+# Which thing the section says it folded. The credential table folds accounts,
+# the rest fold sites, and saying "site" under the credential table names the
+# wrong thing.
+if q == "foldword":
+    mm = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S)
+    if not mm: print("no-more")
+    elif "An account seen more than once" in mm.group(1): print("account")
+    elif "A site seen more than once" in mm.group(1): print("site")
+    else: print("neither")
+    sys.exit()
 if q == "foldwords":
     mm = re.search(r"class=\"more\">(.*?)</p>", m.group(1), re.S)
     print("no-more" if not mm else ("yes" if "standing for" in mm.group(1) else "no"))
@@ -318,6 +363,22 @@ else: print("no-such-question")
 # "$(qy f.html | grep -c 'x')" counts the sentinel as zero matches, and zero is
 # exactly what three of these checks want, so an unreadable report would have
 # passed them. Hand the sentinel straight back instead of counting it.
+# The cover's closing note, as the browser leaves it. Searching the whole page
+# would also find the sentence in the report's own script text, which proves
+# nothing about what a reader sees.
+domfoot() { # domfoot FILE PATTERN -> 1 when the cover foot carries the text
+  readable "$1" || return
+  [ -s "$WORK/dom/$1" ] || { echo no-dom; return 1; }
+  grep -q 'data-report-ready="1"' "$WORK/dom/$1" || { echo no-dom; return 1; }
+  python3 -c '
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"<div class=\"cover\".*?<footer[^>]*class=\"[^\"]*foot[^\"]*\"[^>]*>(.*?)</footer>", s, re.S)
+if not m: m = re.search(r"class=\"foot\"[^>]*>(.*?)</(?:footer|div|p)>", s, re.S)
+print("no-foot" if not m else (1 if sys.argv[2] in m.group(1) else 0))
+' "$WORK/dom/$1" "$2"
+}
+
 qyc() { # qyc FILE PATTERN -> matches in the query, or why the report cannot be read
   local q; q=$(qy "$1")
   case "$q" in not-verified|no-file) printf '%s\n' "$q"; return;; esac
@@ -578,9 +639,9 @@ if wrote "sh  folded report" fo.html; then
   check "sh  --rows 2 keeps two folded rows"             "$(payq fo.html 3 rows)"  "2"
   check "sh  the folded row counts its four repeats"     "$(payq fo.html 3 folds)" "4,-"
   check "sh  foldFirst is earlier than foldLast"         "$(payq fo.html 3 span)"  "asc,-"
-  check "sh  pulled is the raw count, folded the folded" "$(tot fo.html pulled)/$(tot fo.html folded)" "-,-,5,5,5/-,-,2,2,2"
+  check "sh  pulled is the raw count, folded the folded" "$(tot fo.html pulled)/$(tot fo.html folded)" "3,3,5,5,5/3,3,2,2,2"
   check "sh  total is unchanged by the fold"             "$(tot fo.html)" "3412,2906,1184,78,31"
-  check "sh  foldPartial when pulled is under total"     "$(tot fo.html foldPartial)" "-,-,1,1,1"
+  check "sh  foldPartial when pulled is under total"     "$(tot fo.html foldPartial)" "1,1,1,1,1"
   if [ -n "$CHROME" ]; then
     dom fo.html
     check "sh  the folded row carries the note, the lone row does not" "$(domq fo.html s3 fold)" "yes,no"
@@ -593,9 +654,9 @@ if [ -n "$PWSH" ]; then
     check "ps1 -Rows 2 keeps two folded rows"            "$(payq fo2.html 3 rows)"  "2"
     check "ps1 the folded row counts its four repeats"   "$(payq fo2.html 3 folds)" "4,-"
     check "ps1 foldFirst is earlier than foldLast"       "$(payq fo2.html 3 span)"  "asc,-"
-    check "ps1 pulled is the raw count, folded the folded" "$(tot fo2.html pulled)/$(tot fo2.html folded)" "-,-,5,5,5/-,-,2,2,2"
+    check "ps1 pulled is the raw count, folded the folded" "$(tot fo2.html pulled)/$(tot fo2.html folded)" "3,3,5,5,5/3,3,2,2,2"
     check "ps1 total is unchanged by the fold"           "$(tot fo2.html)" "3412,2906,1184,78,31"
-    check "ps1 foldPartial when pulled is under total"   "$(tot fo2.html foldPartial)" "-,-,1,1,1"
+    check "ps1 foldPartial when pulled is under total"   "$(tot fo2.html foldPartial)" "1,1,1,1,1"
   fi
 else
   for c in "-Rows 2 keeps two folded rows" "the folded row counts its four repeats" "foldFirst is earlier than foldLast" \
@@ -606,8 +667,9 @@ fi
 serve FAKE_DUPES=1 FAKE_EXACT=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out fp.html
 if wrote "sh  folded after a full walk" fp.html; then
-  check "sh  no foldPartial when every row was pulled"   "$(tot fp.html foldPartial)" "-,-,-,-,-"
-  check "sh  pulled is the recount, folded is fewer"     "$(tot fp.html pulled)/$(tot fp.html folded)/$(tot fp.html)" "-,-,11,11,11/-,-,8,8,8/3412,2906,11,11,11"
+  # the credential searches are never walked, so their fold saw page 1 only
+  check "sh  no foldPartial when every row was pulled"   "$(tot fp.html foldPartial)" "1,1,-,-,-"
+  check "sh  pulled is the recount, folded is fewer"     "$(tot fp.html pulled)/$(tot fp.html folded)/$(tot fp.html)" "3,3,11,11,11/3,3,8,8,8/3412,2906,11,11,11"
   if [ -n "$CHROME" ]; then
     dom fp.html
     check "sh  no partial note above the table"          "$(domq fp.html s3 note)" "0"
@@ -621,8 +683,8 @@ echo "-- foldPartial: the fold saw only part of the result --"
 serve FAKE_PAGES=45
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out fc.html
 if wrote "sh  filtered walk at the cap" fc.html; then
-  check "sh  foldPartial on a filtered walk that hit the cap" "$(tot fc.html foldPartial)" "-,-,1,1,1"
-  check "sh  reported keeps Axur's count after a recount"     "$(tot fc.html reported)/$(tot fc.html)" "-,-,1184,78,31/3412,2906,120,120,120"
+  check "sh  foldPartial on a filtered walk that hit the cap" "$(tot fc.html foldPartial)" "1,1,1,1,1"
+  check "sh  reported keeps Axur's count after a recount"     "$(tot fc.html reported)/$(tot fc.html)" "3412,2906,1184,78,31/3412,2906,120,120,120"
 fi
 # The note names what the fold covers: the rows the filter kept, not the rows
 # pulled. --min-score 40 drops the scores of 34 and 12, so the two differ.
@@ -638,20 +700,20 @@ fi
 if [ -n "$PWSH" ]; then
   runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 0 -Out fc2.html
   if wrote "ps1 filtered walk at the cap" fc2.html; then
-    check "ps1 foldPartial on a filtered walk that hit the cap" "$(tot fc2.html foldPartial)" "-,-,1,1,1"
-    check "ps1 reported keeps Axur's count after a recount"     "$(tot fc2.html reported)/$(tot fc2.html)" "-,-,1184,78,31/3412,2906,120,120,120"
+    check "ps1 foldPartial on a filtered walk that hit the cap" "$(tot fc2.html foldPartial)" "1,1,1,1,1"
+    check "ps1 reported keeps Axur's count after a recount"     "$(tot fc2.html reported)/$(tot fc2.html)" "3412,2906,1184,78,31/3412,2906,120,120,120"
   fi
 else skip "ps1 foldPartial on a filtered walk that hit the cap"; skip "ps1 reported keeps Axur's count after a recount"; fi
 # The count is unknown: the status carries no totalResults.
 serve FAKE_NOTOTAL=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out fu.html
 if wrote "sh  count unknown" fu.html; then
-  check "sh  foldPartial when the count is unknown"          "$(tot fu.html foldPartial)/$(tot fu.html reported)" "-,-,1,1,1/-,-,null,null,null"
+  check "sh  foldPartial when the count is unknown"          "$(tot fu.html foldPartial)/$(tot fu.html reported)" "1,1,1,1,1/null,null,null,null,null"
 fi
 if [ -n "$PWSH" ]; then
   runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out fu2.html
   if wrote "ps1 count unknown" fu2.html; then
-    check "ps1 foldPartial when the count is unknown"        "$(tot fu2.html foldPartial)/$(tot fu2.html reported)" "-,-,1,1,1/-,-,null,null,null"
+    check "ps1 foldPartial when the count is unknown"        "$(tot fu2.html foldPartial)/$(tot fu2.html reported)" "1,1,1,1,1/null,null,null,null,null"
   fi
 else skip "ps1 foldPartial when the count is unknown"; fi
 # Still running when the wait ran out. Filtered, and with Axur's count equal
@@ -660,12 +722,12 @@ else skip "ps1 foldPartial when the count is unknown"; fi
 serve FAKE_RUNNING=1 FAKE_EXACT=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --min-score 0 --out fs.html
 if wrote "sh  still running" fs.html; then
-  check "sh  foldPartial when the search was still running"  "$(tot fs.html foldPartial)/$(tot fs.html examined)/$(tot fs.html reported)" "-,-,1,1,1/-,-,9,9,9/-,-,9,9,9"
+  check "sh  foldPartial when the search was still running"  "$(tot fs.html foldPartial)/$(tot fs.html examined)/$(tot fs.html reported)" "1,1,1,1,1/3,3,9,9,9/3412,2906,9,9,9"
 fi
 if [ -n "$PWSH" ]; then
   runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -MinScore 0 -Out fs2.html
   if wrote "ps1 still running" fs2.html; then
-    check "ps1 foldPartial when the search was still running" "$(tot fs2.html foldPartial)/$(tot fs2.html examined)/$(tot fs2.html reported)" "-,-,1,1,1/-,-,9,9,9/-,-,9,9,9"
+    check "ps1 foldPartial when the search was still running" "$(tot fs2.html foldPartial)/$(tot fs2.html examined)/$(tot fs2.html reported)" "1,1,1,1,1/3,3,9,9,9/3412,2906,9,9,9"
   fi
 else skip "ps1 foldPartial when the search was still running"; fi
 
@@ -714,12 +776,12 @@ else skip "ps1 two scores: the row stands alone"; fi
 serve FAKE_DUPES=1 FAKE_ODDTOTAL=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out oddt.html
 if wrote "sh  count is a word" oddt.html; then
-  check "sh  a count that is a word sets foldPartial"   "$(tot oddt.html foldPartial)/$(tot oddt.html reported)" "-,-,1,1,1/-,-,null,null,null"
+  check "sh  a count that is a word sets foldPartial"   "$(tot oddt.html foldPartial)/$(tot oddt.html reported)" "1,1,1,1,1/null,null,null,null,null"
 fi
 if [ -n "$PWSH" ]; then
   runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out oddt2.html
   if wrote "ps1 count is a word" oddt2.html; then
-    check "ps1 a count that is a word sets foldPartial" "$(tot oddt2.html foldPartial)/$(tot oddt2.html reported)" "-,-,1,1,1/-,-,null,null,null"
+    check "ps1 a count that is a word sets foldPartial" "$(tot oddt2.html foldPartial)/$(tot oddt2.html reported)" "1,1,1,1,1/null,null,null,null,null"
   fi
 else skip "ps1 a count that is a word sets foldPartial"; fi
 # "NaN" is not a JSON number. Taken as one it never loses a comparison, and
@@ -741,7 +803,7 @@ serve FAKE_X=1
 runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out nf.html
 if wrote "sh  unfolded report" nf.html; then
   check "sh  no row carries a fold count"                "$(payq nf.html 3 folds)" "-,-,-"
-  check "sh  folded equals pulled"                       "$(tot nf.html pulled)/$(tot nf.html folded)" "-,-,3,3,3/-,-,3,3,3"
+  check "sh  folded equals pulled"                       "$(tot nf.html pulled)/$(tot nf.html folded)" "3,3,3,3,3/3,3,3,3,3"
   if [ -n "$CHROME" ]; then
     dom nf.html
     check "sh  no row carries the fold note"             "$(domq nf.html s3 fold)" "no,no,no"
@@ -760,7 +822,134 @@ if wrote "sh  lone-first report" lone.html; then
     dom lone.html
     check "sh  the shown row stands alone"       "$(domq lone.html s3 fold)"      "no"
     check "sh  the section still says it folded" "$(domq lone.html s3 foldwords)" "yes"
-  else skip "sh  the shown row stands alone" "no Chrome"; skip "sh  the section still says it folded" "no Chrome"; fi
+    check "sh  the phishing table says it folded sites" "$(domq lone.html s3 foldword)" "site"
+  else skip "sh  the shown row stands alone" "no Chrome"; skip "sh  the section still says it folded" "no Chrome"; skip "sh  the phishing table says it folded sites" "no Chrome"; fi
+fi
+
+echo "-- one account across many sites folds into one row --"
+# Page 1 of each credential search: abelle six times on six sites, the PLAIN
+# row third and not the newest; cboyd twice on one site; dnoble twice with no
+# site named; eport once. The rendered table puts abelle first (readable),
+# then the rest newest first: eport, cboyd, dnoble.
+SITES6="netflix.com|linkedin.com|github.com|dropbox.com|slack.com|zoom.us"
+PLAINCNT="<b>2,906</b> records · listed in section 01"   # the dumped DOM writes the middot as a character
+PLAINMORE='These 2,906 accounts are the readable ones from section 01. They are listed there, at the top of the table, marked <span class="flag r">Readable</span> in the Kind column. They are not repeated here.'
+serve FAKE_CREDDUPES=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out cd.html
+if wrote "sh  credentials folded" cd.html; then
+  check "sh  the account row counts its repeats"          "$(payq cd.html 1 folds)" "6,2,2,-"
+  check "sh  the account row lists its sites, first seen first" "$(payq cd.html 1 sites)" "6/6:$SITES6,1/1:netflix.com,nosite,-"
+  check "sh  the PLAIN row stands for the group"          "$(payq cd.html 1 pw)" "readable2,hashone0,hashnone0,hashlone"
+  check "sh  In plaintext folds the same way"             "$(payq cd.html 2 sites)" "6/6:$SITES6,1/1:netflix.com,nosite,-"
+  if [ -n "$CHROME" ]; then
+    dom cd.html
+    check "sh  the sentence: six sites, one site, none"   "$(domq cd.html s1 sitenote)" "6 sites: netflix.com, linkedin.com, and 4 more,-,1 site: netflix.com,none"
+    check "sh  the PLAIN row shows its password"          "$(domq cd.html s1 pw)" "readable2,hashlone,hashone0,hashnone0"
+    check "sh  In plaintext: the count is unchanged"      "$(domq cd.html s2 cnt)"  "$PLAINCNT"
+    check "sh  In plaintext: the wording is unchanged"    "$(domq cd.html s2 more)" "$PLAINMORE"
+    # This table folds accounts, not sites, and the line under it has to name
+    # the thing it actually folded.
+    check "sh  the credentials table says it folded accounts" "$(domq cd.html s1 foldword)" "account"
+  else for c in "the sentence: six sites, one site, none" "the PLAIN row shows its password" "In plaintext: the count is unchanged" "In plaintext: the wording is unchanged" "the credentials table says it folded accounts"; do skip "sh  $c" "no Chrome"; done; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out cd2.html
+  if wrote "ps1 credentials folded" cd2.html; then
+    check "ps1 the account row counts its repeats"        "$(payq cd2.html 1 folds)" "6,2,2,-"
+    check "ps1 the account row lists its sites, first seen first" "$(payq cd2.html 1 sites)" "6/6:$SITES6,1/1:netflix.com,nosite,-"
+    check "ps1 the PLAIN row stands for the group"        "$(payq cd2.html 1 pw)" "readable2,hashone0,hashnone0,hashlone"
+    check "ps1 In plaintext folds the same way"           "$(payq cd2.html 2 sites)" "6/6:$SITES6,1/1:netflix.com,nosite,-"
+    if [ -n "$CHROME" ]; then
+      dom cd2.html
+      check "ps1 the sentence: six sites, one site, none" "$(domq cd2.html s1 sitenote)" "6 sites: netflix.com, linkedin.com, and 4 more,-,1 site: netflix.com,none"
+      check "ps1 In plaintext: the count is unchanged"    "$(domq cd2.html s2 cnt)"  "$PLAINCNT"
+      check "ps1 In plaintext: the wording is unchanged"  "$(domq cd2.html s2 more)" "$PLAINMORE"
+    else for c in "the sentence: six sites, one site, none" "In plaintext: the count is unchanged" "In plaintext: the wording is unchanged"; do skip "ps1 $c" "no Chrome"; done; fi
+  fi
+else
+  for c in "the account row counts its repeats" "the account row lists its sites, first seen first" "the PLAIN row stands for the group" "In plaintext folds the same way" \
+           "the sentence: six sites, one site, none" "In plaintext: the count is unchanged" "In plaintext: the wording is unchanged"; do skip "ps1 $c"; done
+fi
+# NETFLIX.COM and https://netflix.com/path are one site: the rule strips the
+# scheme, cuts at the path and lowercases, on both sides.
+serve FAKE_CREDDUPES=1 FAKE_CREDODD=sitecase
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out cs.html
+if wrote "sh  site case and scheme" cs.html; then
+  check "sh  NETFLIX.COM and https://netflix.com/path are one site" "$(payq cs.html 1 sites)" "5/5:netflix.com|github.com|dropbox.com|slack.com|zoom.us,1/1:netflix.com,nosite,-"
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out cs2.html
+  if wrote "ps1 site case and scheme" cs2.html; then
+    check "ps1 NETFLIX.COM and https://netflix.com/path are one site" "$(payq cs2.html 1 sites)" "5/5:netflix.com|github.com|dropbox.com|slack.com|zoom.us,1/1:netflix.com,nosite,-"
+  fi
+else skip "ps1 NETFLIX.COM and https://netflix.com/path are one site"; fi
+# Ten sites: eight are stored, and "and N more" is counted from the true count.
+# Counted from the stored list it would read "and 6 more" and say eight exist.
+serve FAKE_CREDDUPES=1 FAKE_CREDODD=many
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out cm.html
+if wrote "sh  ten sites" cm.html; then
+  check "sh  eight sites stored, ten counted"             "$(payq cm.html 1 sites)" "10/8:$SITES6|adobe.com|spotify.com,1/1:netflix.com,nosite,-"
+  if [ -n "$CHROME" ]; then
+    dom cm.html
+    check "sh  the sentence counts from the true count"   "$(domq cm.html s1 sitenote | cut -d, -f1-3)" "10 sites: netflix.com, linkedin.com, and 8 more"
+  else skip "sh  the sentence counts from the true count" "no Chrome"; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out cm2.html
+  if wrote "ps1 ten sites" cm2.html; then
+    check "ps1 eight sites stored, ten counted"           "$(payq cm2.html 1 sites)" "10/8:$SITES6|adobe.com|spotify.com,1/1:netflix.com,nosite,-"
+  fi
+else skip "ps1 eight sites stored, ten counted"; fi
+
+echo "-- a site named </script> cannot end the payload block --"
+# The report rewrites "</" to "<\/" in every reply so a value cannot close the
+# script block it sits in. Be exact about what this proves. The site the fold
+# writes cannot carry "</" at all: the shared rule cuts a site at its first
+# slash, so </script> normalises to "<" before it is ever written. What this
+# checks is the row the site sits on. That row stands for its group, so its
+# own accessHost, </script> and all, reaches the report, and it is the report's
+# rewrite that keeps it from closing the block. Take that rewrite out and this
+# case fails. Three things must hold: every payload block still parses, the
+# page still reports itself ready, and the file holds exactly one </script>
+# per <script. An unescaped one would cut its block short, fail its parse, and
+# add an eighth. Every site name shown goes through the report's escaping, so
+# the "<" the site normalises to reads &lt; on the page.
+serve FAKE_CREDDUPES=1 FAKE_CREDODD=xss
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out cx.html
+if wrote "sh  script site" cx.html; then
+  check "sh  all five blocks still parse"                 "$(blocks cx.html)" "5"
+  check "sh  one </script> per <script"                   "$(hits cx.html '</script>')/$(hits cx.html '<script')" "7/7"
+  check "sh  the site folded, cut at its first slash"     "$(payq cx.html 1 sites | cut -d, -f1)" "5/5:<|linkedin.com|dropbox.com|slack.com|zoom.us"
+  check "sh  the row that survived carries the raw site, protected" "$(hits cx.html '"accessHost":"<\/script><img src=x onerror=alert(1)>"')" "2"
+  if [ -n "$CHROME" ]; then
+    check "sh  the page still reports itself ready"       "$(dom cx.html && echo ready || echo not-ready)" "ready"
+    check "sh  the site is escaped on the page"           "$(domq cx.html s1 sitenote | cut -d, -f1-3)" "5 sites: &lt;, linkedin.com, and 3 more"
+  else skip "sh  the page still reports itself ready" "no Chrome"; skip "sh  the site is escaped on the page" "no Chrome"; fi
+fi
+if [ -n "$PWSH" ]; then
+  runps -Brand L -Domain $D -KeyFile "$KEYFILE" -NoLogo -NoPdf -NoOpen -Wait 6 -Out cx2.html
+  if wrote "ps1 script site" cx2.html; then
+    check "ps1 all five blocks still parse"               "$(blocks cx2.html)" "5"
+    check "ps1 one </script> per <script"                 "$(hits cx2.html '</script>')/$(hits cx2.html '<script')" "7/7"
+    check "ps1 the site folded, cut at its first slash"   "$(payq cx2.html 1 sites | cut -d, -f1)" "5/5:<|linkedin.com|dropbox.com|slack.com|zoom.us"
+    if [ -n "$CHROME" ]; then
+      check "ps1 the page still reports itself ready"     "$(dom cx2.html && echo ready || echo not-ready)" "ready"
+    else skip "ps1 the page still reports itself ready" "no Chrome"; fi
+  fi
+else for c in "all five blocks still parse" "one </script> per <script" "the site folded, cut at its first slash" "the page still reports itself ready"; do skip "ps1 $c"; done; fi
+
+echo "-- the cover names both kinds of fold --"
+# The cover said "A site seen more than once", and the credential searches fold
+# by account. Any credential result bigger than one page would have read as a
+# site fold.
+serve FAKE_CREDDUPES=1
+runsh --brand L --domain $D --key-file "$KEYFILE" --no-logo --no-pdf --no-open --wait 6 --out cov.html
+if wrote "sh  cover report" cov.html; then
+  if [ -n "$CHROME" ]; then
+    dom cov.html
+    check "sh  the cover says site or account"      "$(domfoot cov.html 'A repeated site or account is shown as one row')" "1"
+    check "sh  the cover no longer says site only"  "$(domfoot cov.html 'A site seen more than once is shown as one row')" "0"
+  else skip "sh  the cover says site or account" "no Chrome"; skip "sh  the cover no longer says site only" "no Chrome"; fi
 fi
 
 echo "-- the suite refuses a report this run did not write --"
