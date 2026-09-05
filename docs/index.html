@@ -116,10 +116,12 @@ input:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--
 /* ---------- plain lists ---------- */
 ol.plain,ul.plain{margin:var(--s-lg) 0 0;padding-left:1.15em}
 ol.plain li,ul.plain li{margin-bottom:var(--s-md);font-size:16px;color:var(--ink-2);max-width:66ch}
-/* a command is one long line: it gets the column, not the reading measure */
-ol.plain li > .cmd,ol.plain li > .getrow{max-width:none}
+/* A command is one long line, so it gets the column rather than the reading
+   measure. The item gives up its cap and every piece of prose inside takes it
+   back, so a bare sentence in the item is capped like the rest. */
 ol.plain li:has(> .cmd),ol.plain li:has(> .getrow){max-width:none}
-ol.plain li:has(> .cmd) > p,ol.plain li:has(> .getrow) > p{max-width:66ch}
+ol.plain li:has(> .cmd) > p,ol.plain li:has(> .getrow) > p,
+ol.plain li > .lede-line{display:block;max-width:66ch}
 code{font-family:var(--mono);font-size:14px;background:var(--soft);
      border:1px solid var(--hairline);border-radius:var(--r-xs);padding:1px 5px;
      letter-spacing:-0.39px}
@@ -171,10 +173,8 @@ footer .wrap{padding-top:var(--s-xl);padding-bottom:var(--s-xl)}
 footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
 
 @media (max-width:640px){
-  .opts{grid-template-columns:1fr}
   .band .wrap{padding-top:var(--s-xxl)}
   h1{font-size:32px;letter-spacing:-0.64px}
-  .fields{grid-template-columns:1fr}
   .row{grid-template-columns:1fr}
   .copy{justify-self:start}
   dl.flags{grid-template-columns:1fr;gap:0}
@@ -237,7 +237,8 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
     <ol class="plain">
       <li>Axur, gear icon, <b>My preferences</b>, <b>API keys</b>, Generate New Key. Copy it
         once; Axur never shows it again.</li>
-      <li>Download the script. It is the same file for every customer; the line you paste below carries the name.
+      <li><span class="lede-line">Download the script. It is the same file for every customer;
+        the line you paste below carries the name.</span>
         <div class="getrow">
           <button class="get" data-os="mac"><span class="arw">&#8595;</span> Download for macOS</button>
           <button class="copy getcopy" data-os="mac">Copy the macOS script</button>
@@ -252,7 +253,8 @@ footer p{margin:0;font-size:14px;color:var(--mute);letter-spacing:-0.39px}
           If your machine blocks that, <b>open it instead</b>, select all, and paste it into a
           new file: <code>axur-report.sh</code> on a Mac, <code>axur-report.ps1</code> on Windows.</p>
       </li>
-      <li>Paste one line. It asks for anything it needs and hides the key as you type.
+      <li><span class="lede-line">Paste one line. It asks for anything it needs and hides the
+        key as you type.</span>
         <div class="cmd"><code id="cmd-mac">bash ~/Downloads/axur-report.sh</code>
           <button class="copy" data-cmd="cmd-mac">Copy</button></div>
         <div class="cmd"><code id="cmd-win">powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\Downloads\axur-report.ps1</code>
